@@ -1,0 +1,97 @@
+export type SupportConversationStatus = 'waiting' | 'active' | 'closed';
+
+export type SupportSender = 'customer' | 'agent' | 'system';
+
+export type SupportMessage = {
+  id: string;
+  sender: SupportSender;
+  senderName: string;
+  content: string;
+  createdAt: string;
+  read: boolean;
+};
+
+export type SupportConversation = {
+  id: string;
+  customerName: string;
+  subject: string;
+  status: SupportConversationStatus;
+  assignee: string | null;
+  priority: 'normal' | 'high';
+  unreadAdmin: number;
+  unreadCustomer: number;
+  lastMessage: string;
+  updatedAt: string;
+  messages: SupportMessage[];
+  messageCount?: number;
+};
+
+type SupportReader = 'customer' | 'agent';
+
+type SupportConversationListResponse = {
+  records: SupportConversation[];
+};
+
+type SupportConversationResponse = {
+  conversation: SupportConversation;
+};
+
+const SUPPORT_API_BASE = import.meta.env.VITE_MOBILE_RUNTIME_URL || 'http://localhost:4180';
+const SUPPORT_CONVERSATION_URL = '/api/support/conversations';
+const SUPPORT_EVENT_URL = '/api/support/events';
+
+async function supportRequest<T>(url: string, options?: RequestInit) {
+  const response = await fetch(`${SUPPORT_API_BASE}${url}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers
+    }
+  });
+
+  if (!response.ok) throw new Error(await response.text());
+
+  return (await response.json()) as T;
+}
+
+function getConversationUrl(id: string) {
+  return `${SUPPORT_CONVERSATION_URL}/${id}`;
+}
+
+export function getSupportEventUrl() {
+  return `${SUPPORT_API_BASE}${SUPPORT_EVENT_URL}`;
+}
+
+export function fetchSupportConversations() {
+  return supportRequest<SupportConversationListResponse>(SUPPORT_CONVERSATION_URL);
+}
+
+export function fetchSupportConversation(id: string) {
+  return supportRequest<SupportConversationResponse>(getConversationUrl(id));
+}
+
+export function markSupportConversationRead(id: string, reader: SupportReader) {
+  return supportRequest<SupportConversationResponse>(`${getConversationUrl(id)}/read`, {
+    method: 'POST',
+    body: JSON.stringify({ reader })
+  });
+}
+
+export function claimSupportConversation(id: string) {
+  return supportRequest<SupportConversationResponse>(`${getConversationUrl(id)}/claim`, {
+    method: 'POST'
+  });
+}
+
+export function closeSupportConversation(id: string) {
+  return supportRequest<SupportConversationResponse>(`${getConversationUrl(id)}/close`, {
+    method: 'POST'
+  });
+}
+
+export function sendSupportAgentMessage(id: string, content: string) {
+  return supportRequest<SupportConversationResponse>(`${getConversationUrl(id)}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ sender: 'agent', content })
+  });
+}
