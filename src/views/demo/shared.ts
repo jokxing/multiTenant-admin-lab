@@ -2,7 +2,7 @@ import { computed, h, reactive, ref } from 'vue';
 import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag } from 'naive-ui';
 
 export type DemoRole = 'platform' | 'tenant' | 'auditor';
-export type DemoAction = 'add' | 'edit' | 'approve' | 'delete' | 'export';
+export type DemoAction = 'add' | 'edit' | 'approve' | 'delete' | 'export' | (string & {});
 
 export interface RouteKeyRecord {
   key: string;

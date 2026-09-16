@@ -155,7 +155,8 @@ const defaultConfig: CampaignConfig = {
 const draftKey = 'mtal_campaign_studio_draft';
 const publishedKey = 'mtal_campaign_studio_published';
 const versionsKey = 'mtal_campaign_studio_versions';
-const runtimeBaseUrl = import.meta.env.VITE_MOBILE_RUNTIME_URL || 'http://localhost:4180';
+const runtimeEntryUrl = import.meta.env.VITE_MOBILE_RUNTIME_URL || 'http://localhost:4180/home';
+const runtimeBaseUrl = runtimeEntryUrl.replace(/\/home\/?$/, '');
 const runtimeOrigin = new URL(runtimeBaseUrl).origin;
 const previewUrl = `${runtimeBaseUrl}/campaigns?preview=1&parentOrigin=${encodeURIComponent(window.location.origin)}`;
 

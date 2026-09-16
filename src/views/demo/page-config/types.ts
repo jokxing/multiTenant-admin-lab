@@ -26,10 +26,28 @@ export type SearchField = {
   options?: Array<{ label: string; value: string | number }>;
 };
 
-export type ConfigSnapshot = {
+export type PageType = 'table' | 'form' | 'table-form';
+
+export type PageConfig = {
+  pageKey: string;
+  pageName: string;
+  routeKey: string;
+  routePath: string;
+  pageType: PageType;
   table: PageColumn[];
   form: FormField[];
   search: SearchField[];
+};
+
+export type ConfigSnapshot = {
+  activePageKey: string;
+  pages: PageConfig[];
+};
+
+export type LegacyConfigSnapshot = {
+  table: PageColumn[];
+  form: FormField[];
+  search?: SearchField[];
 };
 
 export type ConfigVersion = {

@@ -173,6 +173,7 @@ const routeMap: RouteMap = {
   "demo_page-config": "/demo/page-config",
   "demo_permission": "/demo/permission",
   "demo_realtime": "/demo/realtime",
+  "demo_runtime": "/demo/runtime/:pageKey",
   "demo_service-desk": "/demo/service-desk",
   "home": "/home",
   "iframe-page": "/iframe-page/:url",

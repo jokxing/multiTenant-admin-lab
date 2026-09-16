@@ -233,6 +233,7 @@ const local: App.I18n.Schema = {
     'demo_campaign-studio': '营销活动编排',
     demo_permission: '角色权限配置',
     demo_realtime: '实时待办红点',
+    demo_runtime: '运行时页面预览',
     'demo_service-desk': '客户服务会话台'
   },
   page: {

@@ -26,6 +26,7 @@ export const views: Record<LastLevelRouteKey, RouteComponent | (() => Promise<Ro
   "demo_page-config": () => import("@/views/demo/page-config/index.vue"),
   demo_permission: () => import("@/views/demo/permission/index.vue"),
   demo_realtime: () => import("@/views/demo/realtime/index.vue"),
+  demo_runtime: () => import("@/views/demo/runtime/[pageKey].vue"),
   "demo_service-desk": () => import("@/views/demo/service-desk/index.vue"),
   home: () => import("@/views/home/index.vue"),
 };

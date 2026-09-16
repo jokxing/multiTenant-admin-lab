@@ -92,10 +92,10 @@ function formatTime(value: string) {
 
 function connectRealtime() {
   eventSource = new EventSource(getSupportEventUrl());
-  eventSource.onopen = () => {
+  eventSource.addEventListener('open', () => {
     connected.value = true;
-  };
-  eventSource.onmessage = async message => {
+  });
+  eventSource.addEventListener('message', async (message: MessageEvent) => {
     const event = JSON.parse(message.data) as { type?: string; conversationId?: string };
     if (!event.conversationId || realtimeRefreshing) return;
     realtimeRefreshing = true;
@@ -107,10 +107,10 @@ function connectRealtime() {
     } finally {
       realtimeRefreshing = false;
     }
-  };
-  eventSource.onerror = () => {
+  });
+  eventSource.addEventListener('error', () => {
     connected.value = false;
-  };
+  });
 }
 
 onMounted(async () => {
@@ -157,7 +157,7 @@ onBeforeUnmount(() => eventSource?.close());
           v-for="conversation in conversations"
           :key="conversation.id"
           type="button"
-          :class="['conversation-item', { active: conversation.id === selectedId }]"
+          class="conversation-item" :class="[{ active: conversation.id === selectedId }]"
           @click="loadConversation(conversation.id)"
         >
           <span class="avatar"><SvgIcon icon="mdi:account-outline" /></span>
@@ -199,7 +199,7 @@ onBeforeUnmount(() => eventSource?.close());
             <article
               v-for="message in selected.messages"
               :key="message.id"
-              :class="['message-row', `is-${message.sender}`]"
+              class="message-row" :class="[`is-${message.sender}`]"
             >
               <span v-if="message.sender !== 'system'">{{ message.senderName }}</span>
               <p>{{ message.content }}</p>

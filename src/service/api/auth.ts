@@ -78,8 +78,6 @@ export function fetchGetUserInfo() {
     data: userInfo,
     error: null
   });
-
-  return request<Api.Auth.UserInfo>({ url: '/auth/getUserInfo' });
 }
 
 /**

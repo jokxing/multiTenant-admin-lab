@@ -1,7 +1,15 @@
 ﻿<script setup lang="ts">
-import { computed, ref } from 'vue';
-import { pageColumns } from '../shared';
-import { PAGE_CONFIG_STORAGE_KEYS, defaultSearchSchema } from './constants';
+import { computed, reactive, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import { defaultPageColumns, pageColumns } from '../shared';
+import {
+  PAGE_CONFIG_STORAGE_KEYS,
+  defaultFormSchema,
+  defaultPageMeta,
+  defaultSearchSchema,
+  pageTemplateOptions,
+  pageTypeOptions
+} from './constants';
 import FormConfigDesigner from './components/FormConfigDesigner.vue';
 import FormRuleModal from './components/FormRuleModal.vue';
 import FormRuntimePreview from './components/FormRuntimePreview.vue';
@@ -9,9 +17,11 @@ import TableConfigDesigner from './components/TableConfigDesigner.vue';
 import TableRuntimePreview from './components/TableRuntimePreview.vue';
 import { useFormConfig } from './composables/useFormConfig';
 import { useTableConfig } from './composables/useTableConfig';
-import type { ConfigSnapshot, ConfigVersion } from './types';
+import type { ConfigSnapshot, ConfigVersion, LegacyConfigSnapshot, PageConfig, PageType } from './types';
 
 defineOptions({ name: 'DemoPageConfig' });
+
+const router = useRouter();
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -66,6 +76,7 @@ const {
   selectedActionKey,
   selectedColumnIndex,
   selectedSearchIndex,
+  setCurrentRouteKey,
   setTableConfig,
   submitTableAction,
   tableDensity,
@@ -107,26 +118,161 @@ const {
 
 const versionModalVisible = ref(false);
 const publishLoading = ref(false);
+const pageCreateModalVisible = ref(false);
+const pageMetaModalMode = ref<'create' | 'edit'>('create');
+const editingPageKey = ref('');
+const activePageKey = ref(defaultPageMeta.pageKey);
+const newPageModel = reactive({
+  pageName: '',
+  pageKey: '',
+  routeKey: '',
+  routePath: '',
+  pageType: 'table-form' as PageType,
+  template: 'review'
+});
+const pageTemplateSelectOptions = pageTemplateOptions.map(item => ({ label: item.label, value: item.value }));
 
-function createSnapshot(): ConfigSnapshot {
-  return cloneJson({ table: pageColumns.value, form: formSchema.value, search: searchSchema.value });
+function createPageConfig(partial?: Partial<PageConfig>): PageConfig {
+  return {
+    ...defaultPageMeta,
+    table: cloneJson(defaultPageColumns),
+    form: cloneJson(defaultFormSchema),
+    search: cloneJson(defaultSearchSchema),
+    ...partial
+  };
 }
 
-const storedPublished = loadStoredValue<ConfigSnapshot>(PAGE_CONFIG_STORAGE_KEYS.published);
-if (storedPublished) {
-  setTableConfig(cloneJson(storedPublished.table), cloneJson(storedPublished.search || defaultSearchSchema));
-  setFormConfig(cloneJson(storedPublished.form));
+function createOperationTemplate(partial?: Partial<PageConfig>): PageConfig {
+  return createPageConfig({
+    pageKey: 'operation-config',
+    pageName: '运营配置列表',
+    routeKey: 'operations',
+    routePath: '/demo/runtime/operations',
+    table: [
+      { key: 'id', title: '配置编号' },
+      { key: 'title', title: '配置名称' },
+      { key: 'tenant', title: '适用租户' },
+      {
+        key: 'status',
+        title: '发布状态',
+        type: 'tag',
+        options: [
+          { label: '草稿', value: 1, type: 'default' },
+          { label: '待发布', value: 2, type: 'warning' },
+          { label: '已发布', value: 3, type: 'success' },
+          { label: '已停用', value: 4, type: 'error' }
+        ]
+      },
+      { key: 'createdAt', title: '更新时间' },
+      {
+        key: 'action',
+        title: '操作',
+        type: 'action',
+        actions: [
+          { key: 'edit', label: '编辑', mode: 'form', permission: 'edit', type: 'default', formSchema: [] },
+          { key: 'publish', label: '发布', mode: 'confirm', permission: 'approve', type: 'primary' },
+          { key: 'delete', label: '删除', mode: 'confirm', permission: 'delete', type: 'error' }
+        ]
+      }
+    ],
+    ...partial
+  });
 }
 
-const publishedSnapshot = ref<ConfigSnapshot>(
-  storedPublished
-    ? { ...storedPublished, search: cloneJson(storedPublished.search || defaultSearchSchema) }
-    : createSnapshot()
+function createBlankTemplate(partial?: Partial<PageConfig>): PageConfig {
+  return createPageConfig({
+    pageKey: 'custom-page',
+    pageName: '自定义配置页',
+    routeKey: 'custom_page',
+    routePath: '/demo/runtime/custom-page',
+    table: [
+      { key: 'id', title: '编号' },
+      { key: 'title', title: '标题' },
+      {
+        key: 'action',
+        title: '操作',
+        type: 'action',
+        actions: [{ key: 'detail', label: '详情', mode: 'slot', type: 'default', slot: 'detail-panel' }]
+      }
+    ],
+    form: [],
+    search: [],
+    ...partial
+  });
+}
+
+function normalizePageConfig(page: Partial<PageConfig>, index = 0): PageConfig {
+  const fallback = createPageConfig();
+  const pageKey = page.pageKey || (index === 0 ? defaultPageMeta.pageKey : `page_${index + 1}`);
+  return {
+    pageKey,
+    pageName: page.pageName || page.routeKey || fallback.pageName,
+    routeKey: page.routeKey || pageKey,
+    routePath: page.routePath || `/demo/runtime/${pageKey}`,
+    pageType: page.pageType || 'table-form',
+    table: cloneJson(page.table?.length ? page.table : fallback.table),
+    form: cloneJson(page.form || fallback.form),
+    search: cloneJson(page.search || defaultSearchSchema)
+  };
+}
+
+function normalizeSnapshot(value: ConfigSnapshot | LegacyConfigSnapshot | null): ConfigSnapshot {
+  if (value && 'pages' in value && Array.isArray(value.pages)) {
+    const pages = value.pages.map((page, index) => normalizePageConfig(page, index));
+    return {
+      activePageKey: value.activePageKey || pages[0]?.pageKey || defaultPageMeta.pageKey,
+      pages: pages.length ? pages : [createPageConfig()]
+    };
+  }
+
+  if (value && 'table' in value) {
+    return {
+      activePageKey: defaultPageMeta.pageKey,
+      pages: [
+        createPageConfig({
+          table: cloneJson(value.table),
+          form: cloneJson(value.form || defaultFormSchema),
+          search: cloneJson(value.search || defaultSearchSchema)
+        })
+      ]
+    };
+  }
+
+  return { activePageKey: defaultPageMeta.pageKey, pages: [createPageConfig()] };
+}
+
+const storedPublished = loadStoredValue<ConfigSnapshot | LegacyConfigSnapshot>(PAGE_CONFIG_STORAGE_KEYS.published);
+const initialSnapshot = normalizeSnapshot(storedPublished);
+const pages = ref<PageConfig[]>(cloneJson(initialSnapshot.pages));
+activePageKey.value = initialSnapshot.activePageKey;
+
+const activePage = computed(() => pages.value.find(page => page.pageKey === activePageKey.value) || pages.value[0]);
+const pageOptions = computed(() => pages.value.map(page => ({ label: page.pageName, value: page.pageKey })));
+const activePageTypeLabel = computed(
+  () => pageTypeOptions.find(option => option.value === activePage.value?.pageType)?.label || '列表 + 表单'
 );
+
+function syncActivePageDraft() {
+  const page = activePage.value;
+  if (!page) return;
+  page.table = cloneJson(pageColumns.value);
+  page.form = cloneJson(formSchema.value);
+  page.search = cloneJson(searchSchema.value);
+}
+
+function loadPageToDesigner(page: PageConfig) {
+  setCurrentRouteKey(page.routeKey);
+  setTableConfig(cloneJson(page.table), cloneJson(page.search || defaultSearchSchema));
+  setFormConfig(cloneJson(page.form || defaultFormSchema));
+}
+
+loadPageToDesigner(activePage.value || createPageConfig());
+
+const publishedSnapshot = ref<ConfigSnapshot>(cloneJson(initialSnapshot));
 const configVersions = ref<ConfigVersion[]>(
   (loadStoredValue<ConfigVersion[]>(PAGE_CONFIG_STORAGE_KEYS.versions) || []).map(version => ({
     ...version,
-    snapshot: { ...version.snapshot, search: cloneJson(version.snapshot.search || defaultSearchSchema) }
+    snapshot: normalizeSnapshot(version.snapshot as ConfigSnapshot | LegacyConfigSnapshot)
   }))
 );
 
@@ -142,26 +288,188 @@ if (configVersions.value.length === 0) {
   localStorage.setItem(PAGE_CONFIG_STORAGE_KEYS.versions, JSON.stringify(configVersions.value));
 }
 
-const currentSnapshot = computed(() => createSnapshot());
+function createSnapshot(sync = true): ConfigSnapshot {
+  if (sync) syncActivePageDraft();
+  return cloneJson({ activePageKey: activePageKey.value, pages: pages.value });
+}
+
+const currentSnapshot = computed(() => createSnapshot(false));
 const hasUnpublishedChanges = computed(
   () => JSON.stringify(currentSnapshot.value) !== JSON.stringify(publishedSnapshot.value)
 );
 const configDiff = computed(() => {
-  const publishedActions = publishedSnapshot.value.table.find(column => column.type === 'action')?.actions || [];
+  const currentPage = activePage.value || createPageConfig();
+  const publishedPage =
+    publishedSnapshot.value.pages.find(page => page.pageKey === currentPage.pageKey) || createPageConfig();
+  const publishedActions = publishedPage.table.find(column => column.type === 'action')?.actions || [];
   const currentColumns = pageColumns.value.filter(column => column.type !== 'action');
-  const publishedColumns = publishedSnapshot.value.table.filter(column => column.type !== 'action');
+  const publishedColumns = publishedPage.table.filter(column => column.type !== 'action');
+  const currentPageMetas = pages.value.map(({ pageKey, pageName, routeKey, routePath, pageType }) => ({
+    pageKey,
+    pageName,
+    routeKey,
+    routePath,
+    pageType
+  }));
+  const publishedPageMetas = publishedSnapshot.value.pages.map(
+    ({ pageKey, pageName, routeKey, routePath, pageType }) => ({
+      pageKey,
+      pageName,
+      routeKey,
+      routePath,
+      pageType
+    })
+  );
   return {
+    pages: pages.value.length - publishedSnapshot.value.pages.length,
     columns: currentColumns.length - publishedColumns.length,
     actions: configuredActions.value.length - publishedActions.length,
-    fields: formSchema.value.length - publishedSnapshot.value.form.length,
-    search: searchSchema.value.length - (publishedSnapshot.value.search || defaultSearchSchema).length,
+    fields: formSchema.value.length - publishedPage.form.length,
+    search: searchSchema.value.length - (publishedPage.search || defaultSearchSchema).length,
+    pagesChanged: JSON.stringify(currentPageMetas) !== JSON.stringify(publishedPageMetas),
     columnsChanged: JSON.stringify(currentColumns) !== JSON.stringify(publishedColumns),
     actionsChanged: JSON.stringify(configuredActions.value) !== JSON.stringify(publishedActions),
-    fieldsChanged: JSON.stringify(formSchema.value) !== JSON.stringify(publishedSnapshot.value.form),
-    searchChanged:
-      JSON.stringify(searchSchema.value) !== JSON.stringify(publishedSnapshot.value.search || defaultSearchSchema)
+    fieldsChanged: JSON.stringify(formSchema.value) !== JSON.stringify(publishedPage.form),
+    searchChanged: JSON.stringify(searchSchema.value) !== JSON.stringify(publishedPage.search || defaultSearchSchema)
   };
 });
+
+function switchPage(pageKey: string) {
+  if (pageKey === activePageKey.value) return;
+  syncActivePageDraft();
+  activePageKey.value = pageKey;
+  if (activePage.value) loadPageToDesigner(activePage.value);
+}
+
+function createRouteKey(pageKey: string) {
+  return pageKey.replace(/-/g, '_');
+}
+
+function openCreatePageModal() {
+  const suffix = String(Date.now()).slice(-4);
+  pageMetaModalMode.value = 'create';
+  editingPageKey.value = '';
+  Object.assign(newPageModel, {
+    pageName: '新配置页面',
+    pageKey: `custom-page-${suffix}`,
+    routeKey: `custom_page_${suffix}`,
+    routePath: `/demo/runtime/custom-page-${suffix}`,
+    pageType: 'table-form',
+    template: 'review'
+  });
+  pageCreateModalVisible.value = true;
+}
+
+function openEditPageModal() {
+  const page = activePage.value;
+  if (!page) return;
+  pageMetaModalMode.value = 'edit';
+  editingPageKey.value = page.pageKey;
+  Object.assign(newPageModel, {
+    pageName: page.pageName,
+    pageKey: page.pageKey,
+    routeKey: page.routeKey,
+    routePath: page.routePath,
+    pageType: page.pageType,
+    template: 'review'
+  });
+  pageCreateModalVisible.value = true;
+}
+
+function buildPageFromTemplate(): PageConfig {
+  const meta = {
+    pageName: newPageModel.pageName,
+    pageKey: newPageModel.pageKey,
+    routeKey: newPageModel.routeKey || createRouteKey(newPageModel.pageKey),
+    routePath: newPageModel.routePath || `/demo/runtime/${newPageModel.pageKey}`,
+    pageType: newPageModel.pageType
+  };
+  if (newPageModel.template === 'operations') return createOperationTemplate(meta);
+  if (newPageModel.template === 'blank') return createBlankTemplate(meta);
+
+  return createPageConfig(meta);
+}
+
+function createPage() {
+  const pageKey = newPageModel.pageKey.trim();
+  const routeKey = (newPageModel.routeKey || createRouteKey(pageKey)).trim();
+  if (!pageKey || !newPageModel.pageName.trim()) {
+    window.$message?.warning('请填写页面名称和页面标识');
+    return;
+  }
+  if (pages.value.some(page => page.pageKey === pageKey)) {
+    window.$message?.warning('页面标识已存在');
+    return;
+  }
+  if (pages.value.some(page => page.routeKey === routeKey)) {
+    window.$message?.warning('权限 routeKey 已存在');
+    return;
+  }
+
+  Object.assign(newPageModel, { pageKey, routeKey });
+  const page = buildPageFromTemplate();
+  syncActivePageDraft();
+  pages.value.push(page);
+  activePageKey.value = page.pageKey;
+  loadPageToDesigner(page);
+  pageCreateModalVisible.value = false;
+  window.$message?.success('页面已加入草稿，发布后同步到权限树');
+}
+
+function savePageMeta() {
+  const page = pages.value.find(item => item.pageKey === editingPageKey.value);
+  if (!page) return;
+  const pageKey = newPageModel.pageKey.trim();
+  const routeKey = (newPageModel.routeKey || createRouteKey(pageKey)).trim();
+  if (!pageKey || !newPageModel.pageName.trim()) {
+    window.$message?.warning('请填写页面名称和页面标识');
+    return;
+  }
+  if (pages.value.some(item => item.pageKey === pageKey && item.pageKey !== editingPageKey.value)) {
+    window.$message?.warning('页面标识已存在');
+    return;
+  }
+  if (pages.value.some(item => item.routeKey === routeKey && item.pageKey !== editingPageKey.value)) {
+    window.$message?.warning('权限 routeKey 已存在');
+    return;
+  }
+
+  page.pageName = newPageModel.pageName.trim();
+  page.pageKey = pageKey;
+  page.routeKey = routeKey;
+  page.routePath = newPageModel.routePath.trim() || `/demo/runtime/${pageKey}`;
+  page.pageType = newPageModel.pageType;
+  activePageKey.value = pageKey;
+  editingPageKey.value = pageKey;
+  setCurrentRouteKey(routeKey);
+  pageCreateModalVisible.value = false;
+  window.$message?.success('页面信息已更新');
+}
+
+function duplicateCurrentPage() {
+  const page = activePage.value;
+  if (!page) return;
+  const suffix = String(Date.now()).slice(-4);
+  const next = normalizePageConfig({
+    ...cloneJson(page),
+    pageKey: `${page.pageKey}-copy-${suffix}`,
+    pageName: `${page.pageName}副本`,
+    routeKey: `${page.routeKey}_copy_${suffix}`,
+    routePath: `${page.routePath}-copy-${suffix}`
+  });
+  syncActivePageDraft();
+  pages.value.push(next);
+  activePageKey.value = next.pageKey;
+  loadPageToDesigner(next);
+}
+
+watch(
+  [pageColumns, formSchema, searchSchema],
+  () => {
+    syncActivePageDraft();
+  },
+  { deep: true }
+);
 
 function applyJson() {
   try {
@@ -184,21 +492,31 @@ function applyJson() {
 }
 
 function validateConfiguration() {
+  syncActivePageDraft();
   const errors: string[] = [];
   const duplicateValues = (values: string[]) =>
     values.filter((value, index) => !value || values.indexOf(value) !== index);
-  if (duplicateValues(pageColumns.value.map(column => column.key)).length) errors.push('表格列字段名存在空值或重复');
-  if (duplicateValues(configuredActions.value.map(action => action.key)).length)
-    errors.push('操作按钮标识存在空值或重复');
-  if (duplicateValues(formSchema.value.map(field => field.field)).length) errors.push('页面表单字段名存在空值或重复');
-  if (duplicateValues(searchSchema.value.map(field => field.key)).length) errors.push('搜索字段名存在空值或重复');
-  configuredActions.value
-    .filter(action => action.mode === 'form')
-    .forEach(action => {
-      const fields = action.formSchema || [];
-      if (duplicateValues(fields.map(field => field.field)).length)
-        errors.push(`“${action.label}”表单字段名存在空值或重复`);
-    });
+  if (duplicateValues(pages.value.map(page => page.pageKey)).length) errors.push('页面标识存在空值或重复');
+  if (duplicateValues(pages.value.map(page => page.routeKey)).length) errors.push('权限 routeKey 存在空值或重复');
+
+  pages.value.forEach(page => {
+    const actions = page.table.find(column => column.type === 'action')?.actions || [];
+    if (duplicateValues(page.table.map(column => column.key)).length)
+      errors.push(`“${page.pageName}”表格列字段名存在空值或重复`);
+    if (duplicateValues(actions.map(action => action.key)).length)
+      errors.push(`“${page.pageName}”操作按钮标识存在空值或重复`);
+    if (duplicateValues(page.form.map(field => field.field)).length)
+      errors.push(`“${page.pageName}”页面表单字段名存在空值或重复`);
+    if (duplicateValues(page.search.map(field => field.key)).length)
+      errors.push(`“${page.pageName}”搜索字段名存在空值或重复`);
+    actions
+      .filter(action => action.mode === 'form')
+      .forEach(action => {
+        const fields = action.formSchema || [];
+        if (duplicateValues(fields.map(field => field.field)).length)
+          errors.push(`“${page.pageName} / ${action.label}”表单字段名存在空值或重复`);
+      });
+  });
   return errors;
 }
 
@@ -218,6 +536,7 @@ async function publishConfiguration() {
   const snapshot = createSnapshot();
   const version = (configVersions.value[0]?.version || 0) + 1;
   const summary = [
+    formatDelta(configDiff.value.pages, '页面', configDiff.value.pagesChanged),
     formatDelta(configDiff.value.columns, '列', configDiff.value.columnsChanged),
     formatDelta(configDiff.value.actions, '按钮', configDiff.value.actionsChanged),
     formatDelta(configDiff.value.fields, '字段', configDiff.value.fieldsChanged),
@@ -239,8 +558,10 @@ async function publishConfiguration() {
 }
 
 function rollbackVersion(version: ConfigVersion) {
-  setTableConfig(cloneJson(version.snapshot.table), cloneJson(version.snapshot.search || defaultSearchSchema));
-  setFormConfig(cloneJson(version.snapshot.form));
+  const snapshot = normalizeSnapshot(version.snapshot);
+  pages.value = cloneJson(snapshot.pages);
+  activePageKey.value = snapshot.activePageKey;
+  loadPageToDesigner(activePage.value || pages.value[0]);
   publishedSnapshot.value = createSnapshot();
   const rollbackRecord: ConfigVersion = {
     id: `rollback_${Date.now()}`,
@@ -256,17 +577,26 @@ function rollbackVersion(version: ConfigVersion) {
 }
 
 function discardDraft() {
-  setTableConfig(
-    cloneJson(publishedSnapshot.value.table),
-    cloneJson(publishedSnapshot.value.search || defaultSearchSchema)
-  );
-  setFormConfig(cloneJson(publishedSnapshot.value.form));
+  pages.value = cloneJson(publishedSnapshot.value.pages);
+  activePageKey.value = publishedSnapshot.value.activePageKey;
+  loadPageToDesigner(activePage.value || pages.value[0]);
   window.$message?.success('未发布修改已撤销');
 }
 
 function restore() {
   if (configMode.value === 'table') resetTableSchema();
   else resetFormSchema();
+}
+
+function previewRuntimePage() {
+  const page = activePage.value;
+  if (!page) return;
+  const publishedPage = publishedSnapshot.value.pages.find(item => item.pageKey === page.pageKey);
+  if (!publishedPage || hasUnpublishedChanges.value) {
+    window.$message?.warning('运行时页面只读取已发布配置，请先发布当前草稿');
+    return;
+  }
+  router.push(`/demo/runtime/${page.pageKey}`);
 }
 </script>
 
@@ -303,12 +633,40 @@ function restore() {
         可视化操作会实时生成 JSON Schema，并同步驱动右侧表单预览与校验规则。
       </NAlert>
       <NAlert v-if="hasUnpublishedChanges" type="warning" :bordered="false" class="draft-alert">
-        草稿差异：{{ formatDelta(configDiff.columns, '列', configDiff.columnsChanged) }}，{{
-          formatDelta(configDiff.search, '搜索项', configDiff.searchChanged)
-        }}，{{ formatDelta(configDiff.actions, '按钮', configDiff.actionsChanged) }}，{{
-          formatDelta(configDiff.fields, '字段', configDiff.fieldsChanged)
-        }}
+        草稿差异：{{ formatDelta(configDiff.pages, '页面', configDiff.pagesChanged) }}，{{
+          formatDelta(configDiff.columns, '列', configDiff.columnsChanged)
+        }}，{{ formatDelta(configDiff.search, '搜索项', configDiff.searchChanged) }}，{{
+          formatDelta(configDiff.actions, '按钮', configDiff.actionsChanged)
+        }}，{{ formatDelta(configDiff.fields, '字段', configDiff.fieldsChanged) }}
       </NAlert>
+
+      <div class="page-toolbar">
+        <div class="page-toolbar-main">
+          <span class="toolbar-label">当前配置页</span>
+          <NSelect :value="activePageKey" class="page-select" :options="pageOptions" @update:value="switchPage" />
+          <NTag :bordered="false" type="info">{{ activePageTypeLabel }}</NTag>
+          <NTag :bordered="false">{{ activePage?.routePath }}</NTag>
+          <NTag :bordered="false">routeKey: {{ activePage?.routeKey }}</NTag>
+        </div>
+        <NSpace>
+          <NButton secondary type="primary" @click="previewRuntimePage">
+            <template #icon><SvgIcon icon="mdi:play-box-outline" /></template>
+            预览页面
+          </NButton>
+          <NButton secondary @click="openEditPageModal">
+            <template #icon><SvgIcon icon="mdi:pencil-outline" /></template>
+            编辑页面
+          </NButton>
+          <NButton secondary @click="duplicateCurrentPage">
+            <template #icon><SvgIcon icon="mdi:content-copy" /></template>
+            复制页面
+          </NButton>
+          <NButton type="primary" secondary @click="openCreatePageModal">
+            <template #icon><SvgIcon icon="mdi:file-plus-outline" /></template>
+            新增页面
+          </NButton>
+        </NSpace>
+      </div>
 
       <div class="mode-switch">
         <NRadioGroup v-model:value="configMode" name="config-mode">
@@ -430,6 +788,47 @@ function restore() {
     </NCard>
 
     <NModal
+      v-model:show="pageCreateModalVisible"
+      preset="card"
+      :title="pageMetaModalMode === 'create' ? '新增配置页面' : '编辑配置页面'"
+      style="width: min(720px, calc(100vw - 32px))"
+    >
+      <NAlert type="info" :bordered="false" class="modal-tip">
+        这里维护的是页面配置元数据，发布后会进入权限树；真实业务中可由后端按 routeKey 下发菜单、按钮与 Schema。
+      </NAlert>
+      <NForm label-placement="top" :model="newPageModel">
+        <div class="page-meta-grid">
+          <NFormItem label="页面名称">
+            <NInput v-model:value="newPageModel.pageName" placeholder="例如：资金申请审核" />
+          </NFormItem>
+          <NFormItem label="页面类型">
+            <NSelect v-model:value="newPageModel.pageType" :options="pageTypeOptions" />
+          </NFormItem>
+          <NFormItem label="页面标识">
+            <NInput v-model:value="newPageModel.pageKey" placeholder="例如：fund-review" />
+          </NFormItem>
+          <NFormItem label="权限 routeKey" feedback="用于角色权限树和按钮鉴权，修改后需要重新发布配置并同步权限。">
+            <NInput v-model:value="newPageModel.routeKey" placeholder="例如：fund_review" />
+          </NFormItem>
+          <NFormItem label="路由路径" feedback="用于菜单访问地址或运行时配置页路径。">
+            <NInput v-model:value="newPageModel.routePath" placeholder="/demo/runtime/fund-review" />
+          </NFormItem>
+          <NFormItem v-if="pageMetaModalMode === 'create'" label="初始模板">
+            <NSelect v-model:value="newPageModel.template" :options="pageTemplateSelectOptions" />
+          </NFormItem>
+        </div>
+      </NForm>
+      <template #footer>
+        <div class="actions">
+          <NButton @click="pageCreateModalVisible = false">取消</NButton>
+          <NButton type="primary" @click="pageMetaModalMode === 'create' ? createPage() : savePageMeta()">
+            {{ pageMetaModalMode === 'create' ? '加入草稿' : '保存页面信息' }}
+          </NButton>
+        </div>
+      </template>
+    </NModal>
+
+    <NModal
       v-model:show="versionModalVisible"
       preset="card"
       title="配置版本管理"
@@ -440,11 +839,11 @@ function restore() {
           <div>
             <NText strong>{{ hasUnpublishedChanges ? '当前草稿尚未发布' : '当前配置已发布' }}</NText>
             <div class="version-diff">
-              {{ formatDelta(configDiff.columns, '列', configDiff.columnsChanged) }}，{{
-                formatDelta(configDiff.search, '搜索项', configDiff.searchChanged)
-              }}，{{ formatDelta(configDiff.actions, '按钮', configDiff.actionsChanged) }}，{{
-                formatDelta(configDiff.fields, '字段', configDiff.fieldsChanged)
-              }}
+              {{ formatDelta(configDiff.pages, '页面', configDiff.pagesChanged) }}，{{
+                formatDelta(configDiff.columns, '列', configDiff.columnsChanged)
+              }}，{{ formatDelta(configDiff.search, '搜索项', configDiff.searchChanged) }}，{{
+                formatDelta(configDiff.actions, '按钮', configDiff.actionsChanged)
+              }}，{{ formatDelta(configDiff.fields, '字段', configDiff.fieldsChanged) }}
             </div>
           </div>
           <NSpace>
@@ -556,6 +955,45 @@ function restore() {
 <style scoped>
 .page-config-root {
   min-width: 0;
+}
+
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  margin-top: 16px;
+  border: 1px solid #e6e8f0;
+  border-radius: 8px;
+  background: #fafbff;
+}
+
+.page-toolbar-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.toolbar-label {
+  color: #64748b;
+  font-size: 14px;
+}
+
+.page-select {
+  width: 220px;
+}
+
+.modal-tip {
+  margin-bottom: 16px;
+}
+
+.page-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 16px;
 }
 
 .mode-switch,
@@ -699,6 +1137,7 @@ function restore() {
 }
 
 @media (max-width: 700px) {
+  .page-meta-grid,
   .field-grid,
   .preview-grid {
     grid-template-columns: 1fr;

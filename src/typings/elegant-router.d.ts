@@ -27,6 +27,7 @@ declare module "@elegant-router/types" {
     "demo_page-config": "/demo/page-config";
     "demo_permission": "/demo/permission";
     "demo_realtime": "/demo/realtime";
+    "demo_runtime": "/demo/runtime/:pageKey";
     "demo_service-desk": "/demo/service-desk";
     "home": "/home";
     "iframe-page": "/iframe-page/:url";
@@ -96,6 +97,7 @@ declare module "@elegant-router/types" {
     | "demo_page-config"
     | "demo_permission"
     | "demo_realtime"
+    | "demo_runtime"
     | "demo_service-desk"
     | "home"
   >;

@@ -4,12 +4,13 @@ import { useRouter } from 'vue-router';
 import {
   activeRole,
   currentProfile,
-  pageColumns,
   roleProfiles,
   type DemoAction,
   type DemoRole,
   type RouteKeyRecord
 } from '../shared';
+import { PAGE_CONFIG_STORAGE_KEYS } from '../page-config/constants';
+import type { ConfigSnapshot, LegacyConfigSnapshot, PageConfig } from '../page-config/types';
 
 defineOptions({ name: 'DemoPermission' });
 
@@ -18,14 +19,71 @@ const router = useRouter();
 const checkedKeys = ref<string[]>([]);
 const publishedKeys = ref<string[]>([]);
 const auditLogs = ref<Array<{ time: string; role: string; summary: string }>>([]);
+const configuredPages = ref<PageConfig[]>(loadConfiguredPages());
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function loadStoredValue<T>(key: string): T | null {
+  try {
+    const value = localStorage.getItem(key);
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadConfiguredPages() {
+  const snapshot = loadStoredValue<ConfigSnapshot | LegacyConfigSnapshot>(PAGE_CONFIG_STORAGE_KEYS.published);
+  if (snapshot && 'pages' in snapshot && Array.isArray(snapshot.pages)) return cloneJson(snapshot.pages);
+  if (snapshot && 'table' in snapshot) {
+    return [
+      {
+        pageKey: 'review',
+        pageName: '申请审核列表',
+        routeKey: 'review',
+        routePath: '/demo/runtime/review',
+        pageType: 'table-form',
+        table: snapshot.table,
+        form: snapshot.form,
+        search: snapshot.search || []
+      } satisfies PageConfig
+    ];
+  }
+
+  return [];
+}
+
+function refreshConfiguredPages() {
+  configuredPages.value = loadConfiguredPages();
+  loadRole(activeRole.value);
+  window.$message?.success('已刷新页面配置');
+}
 
 const schemaActionNodes = computed(() => {
-  const actions = pageColumns.value.find(column => column.type === 'action')?.actions || [];
+  const actions = configuredPages.value.flatMap(
+    page => page.table.find(column => column.type === 'action')?.actions || []
+  );
   const seen = new Set<string>();
   return actions
     .filter(action => action.permission && !seen.has(action.permission) && seen.add(action.permission))
-    .map(action => ({ label: action.label, key: `review:${action.permission}` }));
+    .map(action => ({ label: action.label, key: action.permission as string }));
 });
+
+const configuredPageNodes = computed(() =>
+  configuredPages.value.map(page => {
+    const actions = page.table.find(column => column.type === 'action')?.actions || [];
+    const seen = new Set<string>();
+    return {
+      label: page.pageName,
+      key: page.routeKey,
+      children: actions
+        .filter(action => action.permission && !seen.has(action.permission) && seen.add(action.permission))
+        .map(action => ({ label: action.label, key: `${page.routeKey}:${action.permission}` }))
+    };
+  })
+);
 
 const permissionTree = computed(() => [
   {
@@ -43,11 +101,7 @@ const permissionTree = computed(() => [
       { label: '导出', key: 'operations:export' }
     ]
   },
-  {
-    label: '申请审核',
-    key: 'review',
-    children: schemaActionNodes.value
-  },
+  ...configuredPageNodes.value,
   {
     label: '页面配置器',
     key: 'page_setting',
@@ -127,11 +181,17 @@ function savePermission() {
 <template>
   <NCard title="角色权限配置闭环" :bordered="false">
     <template #header-extra>
-      <NSelect v-model:value="activeRole" class="role-select" :options="roleOptions" />
+      <NSpace align="center">
+        <NButton size="small" secondary @click="refreshConfiguredPages">
+          <template #icon><SvgIcon icon="mdi:refresh" /></template>
+          刷新页面配置
+        </NButton>
+        <NSelect v-model:value="activeRole" class="role-select" :options="roleOptions" />
+      </NSpace>
     </template>
     <NAlert type="info" :bordered="false">
-      当前授权角色：{{ currentProfile.label }}。申请审核下的按钮权限由页面 Schema 动态发现，共
-      {{ schemaActionNodes.length }} 项。
+      当前授权角色：{{ currentProfile.label }}。已从页面配置读取 {{ configuredPages.length }} 个页面，动态发现
+      {{ schemaActionNodes.length }} 个按钮权限。
     </NAlert>
 
     <div class="permission-layout">

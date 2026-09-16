@@ -118,6 +118,18 @@ export const generatedRoutes: GeneratedRoute[] = [
         }
       },
       {
+        name: 'demo_runtime',
+        path: '/demo/runtime/:pageKey',
+        component: 'view.demo_runtime',
+        props: true,
+        meta: {
+          title: '运行时页面预览',
+          hideInMenu: true,
+          activeMenu: 'demo_page-config',
+          i18nKey: 'route.demo_runtime'
+        }
+      },
+      {
         name: 'demo_service-desk',
         path: '/demo/service-desk',
         component: 'view.demo_service-desk',

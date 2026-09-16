@@ -51,6 +51,7 @@ export function useTableConfig() {
   const tableEditorMode = ref<'json' | 'visual'>('json');
   const tableVisualMode = ref<'columns' | 'search' | 'actions' | 'action-form'>('columns');
   const tablePreviewMode = ref<'config' | 'role'>('config');
+  const currentRouteKey = ref('review');
   const searchSchema = ref<SearchField[]>(cloneJson(defaultSearchSchema));
   const tableJson = ref(JSON.stringify({ columns: pageColumns.value, search: searchSchema.value }, null, 2));
   const activeAction = ref<TableAction | null>(null);
@@ -77,7 +78,9 @@ export function useTableConfig() {
     storedTablePreference?.visible || pageColumns.value.map(column => column.key)
   );
   const columnOrder = ref<string[]>(storedTablePreference?.order || pageColumns.value.map(column => column.key));
-  const baseColumns = computed(() => buildColumns('review', executeTableAction, tablePreviewMode.value === 'role'));
+  const baseColumns = computed(() =>
+    buildColumns(currentRouteKey.value, executeTableAction, tablePreviewMode.value === 'role')
+  );
   const columns = computed(() => {
     const columnMap = new Map(baseColumns.value.map((column: any) => [String(column.key), column]));
     return columnOrder.value
@@ -91,7 +94,7 @@ export function useTableConfig() {
   const selectedAction = computed(() => configuredActions.value[selectedActionIndex.value]);
   const selectedSearchField = computed(() => searchSchema.value[selectedSearchIndex.value]);
   const hiddenActions = computed(() =>
-    configuredActions.value.filter(action => action.permission && !canUse('review', action.permission))
+    configuredActions.value.filter(action => action.permission && !canUse(currentRouteKey.value, action.permission))
   );
   const previewRoleOptions = Object.entries(roleProfiles).map(([value, profile]) => ({ label: profile.label, value }));
   const formActions = computed(
@@ -196,6 +199,10 @@ export function useTableConfig() {
     syncStatusSearchOptions();
     resetSearchModel();
     tableJson.value = JSON.stringify({ columns: pageColumns.value, search: searchSchema.value }, null, 2);
+  }
+
+  function setCurrentRouteKey(routeKey: string) {
+    currentRouteKey.value = routeKey || 'review';
   }
 
   function resetTableSchema() {
@@ -527,6 +534,7 @@ export function useTableConfig() {
     selectedColumnIndex,
     selectedSearchField,
     selectedSearchIndex,
+    setCurrentRouteKey,
     setTableConfig,
     submitTableAction,
     tableDensity,

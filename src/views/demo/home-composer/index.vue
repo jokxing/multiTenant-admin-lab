@@ -3,7 +3,12 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 
 defineOptions({ name: 'DemoHomeComposer' });
 
-type ModuleType = 'hero-banner' | 'notice-ticker' | 'quick-nav' | 'content-grid' | 'benefit-cards';
+type ModuleType =
+  | 'hero-banner'
+  | 'notice-ticker'
+  | 'quick-nav'
+  | 'content-grid'
+  | 'benefit-cards';
 type HomeModule = {
   id: string;
   type: ModuleType;
@@ -74,7 +79,7 @@ const defaultSchema: HomeSchema = {
 const draftKey = 'mtal_home_composer_draft';
 const publishedKey = 'mtal_home_composer_published';
 const versionsKey = 'mtal_home_composer_versions';
-const previewBaseUrl = `${import.meta.env.VITE_MOBILE_RUNTIME_URL || 'http://localhost:4180'}/home`;
+const previewBaseUrl = import.meta.env.VITE_MOBILE_RUNTIME_URL || 'http://localhost:4180/home';
 const previewUrl = `${previewBaseUrl}?preview=1&parentOrigin=${encodeURIComponent(window.location.origin)}`;
 const previewOrigin = new URL(previewBaseUrl).origin;
 
@@ -91,8 +96,16 @@ function readStorage<T>(key: string, fallback: T): T {
   }
 }
 
-const schema = ref(readStorage(draftKey, clone(defaultSchema)));
-const publishedSchema = ref(readStorage(publishedKey, clone(defaultSchema)));
+const supportedModuleTypes = new Set<ModuleType>(catalog.map(item => item.type));
+
+function normalizeHomeSchema(value: HomeSchema): HomeSchema {
+  const next = clone(value);
+  next.modules = next.modules.filter(item => supportedModuleTypes.has(item.type));
+  return next.modules.length ? next : clone(defaultSchema);
+}
+
+const schema = ref(normalizeHomeSchema(readStorage(draftKey, clone(defaultSchema))));
+const publishedSchema = ref(normalizeHomeSchema(readStorage(publishedKey, clone(defaultSchema))));
 const versions = ref<ConfigVersion[]>(readStorage(versionsKey, []));
 const selectedId = ref(schema.value.modules[0]?.id || '');
 const editorMode = ref<'visual' | 'json'>('visual');

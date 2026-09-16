@@ -237,6 +237,7 @@ const local: App.I18n.Schema = {
     'demo_campaign-studio': 'Campaign Studio',
     demo_permission: 'Role Permission',
     demo_realtime: 'Realtime Todo',
+    demo_runtime: 'Runtime Preview',
     'demo_service-desk': 'Service Desk'
   },
   page: {
