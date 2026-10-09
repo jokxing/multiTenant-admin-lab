@@ -40,6 +40,7 @@
     "prepare": "simple-git-hooks",
     "preview": "vite preview",
     "release": "sa release",
+    "test:demo": "tsx src/views/demo/list-sort/list-sort.test.ts && tsx src/views/demo/list-sort/list-sort-save.test.ts && tsx src/views/demo/lang-asset/lang-asset.test.ts",
     "typecheck": "vue-tsc --noEmit --skipLibCheck",
     "update-pkg": "sa update-pkg"
   },

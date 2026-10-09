@@ -17,7 +17,7 @@ const props = defineProps<{
   addTableColumn: () => void;
   moveTableColumn: (index: number, offset: -1 | 1) => void;
   removeTableColumn: (index: number) => void;
-  updateColumnType: (value: 'text' | 'tag' | 'amount') => void;
+  updateColumnType: (value: 'text' | 'tag' | 'amount' | 'sortable') => void;
   updateColumnTagOptions: (text: string) => void;
   addSearchField: (type: SearchField['type']) => void;
   moveSearchField: (index: number, offset: -1 | 1) => void;
@@ -141,7 +141,8 @@ function handleColumnOptionsUpdate(value: string) {
               :options="[
                 { label: '文本', value: 'text' },
                 { label: '状态标签', value: 'tag' },
-                { label: '金额', value: 'amount' }
+                { label: '金额', value: 'amount' },
+                { label: '列表排序', value: 'sortable' }
               ]"
               @update:value="updateColumnType"
             />

@@ -36,7 +36,8 @@ type SupportConversationResponse = {
   conversation: SupportConversation;
 };
 
-const SUPPORT_API_BASE = import.meta.env.VITE_MOBILE_RUNTIME_URL || 'http://localhost:4180';
+// The runtime URL may include a preview page path such as /home; APIs live at the origin.
+const SUPPORT_API_BASE = new URL(import.meta.env.VITE_MOBILE_RUNTIME_URL || 'http://localhost:4180').origin;
 const SUPPORT_CONVERSATION_URL = '/api/support/conversations';
 const SUPPORT_EVENT_URL = '/api/support/events';
 

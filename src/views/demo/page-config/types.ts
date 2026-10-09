@@ -1,6 +1,6 @@
 import type { PageColumn } from '../shared';
 
-export type FieldType = 'input' | 'textarea' | 'select' | 'number' | 'switch' | 'date';
+export type FieldType = 'input' | 'textarea' | 'select' | 'number' | 'switch' | 'date' | 'lang-asset-group';
 
 export type FormField = {
   field: string;
@@ -15,7 +15,21 @@ export type FormField = {
   message?: string;
   span?: 1 | 2;
   visibleWhen?: { field: string; equals: string };
+  /** 多语言素材组：主语言，默认 zh-CN */
+  primaryLang?: 'zh-CN' | 'zh-TW' | 'en';
+  /** 多语言素材组：启用的语言列表 */
+  languages?: Array<'zh-CN' | 'zh-TW' | 'en'>;
 };
+
+export const FORM_FIELD_TYPES: FieldType[] = [
+  'input',
+  'textarea',
+  'select',
+  'number',
+  'switch',
+  'date',
+  'lang-asset-group'
+];
 
 export type SearchField = {
   key: string;

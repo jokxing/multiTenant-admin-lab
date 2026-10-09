@@ -1,5 +1,6 @@
 import { computed, h, reactive, ref } from 'vue';
 import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag } from 'naive-ui';
+import SortableColumnCell from './list-sort/SortableColumnCell.vue';
 
 export type DemoRole = 'platform' | 'tenant' | 'auditor';
 export type DemoAction = 'add' | 'edit' | 'approve' | 'delete' | 'export' | (string & {});
@@ -22,7 +23,7 @@ export interface SchemaField {
 export interface PageColumn {
   key: string;
   title: string;
-  type?: 'tag' | 'amount' | 'action';
+  type?: 'tag' | 'amount' | 'action' | 'sortable';
   options?: Array<{
     label: string;
     value: string | number;
@@ -30,6 +31,14 @@ export interface PageColumn {
   }>;
   actions?: TableAction[];
 }
+
+export type SortColumnContext = {
+  disabled: boolean;
+  submitting: boolean;
+  total: number;
+  getIndex: (row: Record<string, any>) => number;
+  onSortAction: (action: 'drag-sort' | 'sortTop' | 'sort-up' | 'sort-down', row: Record<string, any>) => void;
+};
 
 export interface TableAction {
   key: string;
@@ -58,6 +67,12 @@ export const roleProfiles = reactive<
       { key: 'workspace', title: '工作台', buttons: ['export'] },
       { key: 'operations', title: '运营配置', buttons: ['add', 'edit', 'approve', 'delete', 'export'] },
       { key: 'review', title: '申请审核', buttons: ['edit', 'approve', 'delete', 'export'] },
+      {
+        key: 'content_recommend',
+        title: '内容推荐',
+        buttons: ['edit', 'export']
+      },
+      { key: 'lang_asset_form', title: '多语言素材组', buttons: ['edit', 'export'] },
       { key: 'page_setting', title: '页面配置器', buttons: ['add', 'edit', 'export'] }
     ]
   },
@@ -67,7 +82,9 @@ export const roleProfiles = reactive<
     routeKeys: [
       { key: 'workspace', title: '工作台', buttons: ['export'] },
       { key: 'operations', title: '运营配置', buttons: ['add', 'edit', 'export'] },
-      { key: 'review', title: '申请审核', buttons: ['edit', 'approve', 'export'] }
+      { key: 'review', title: '申请审核', buttons: ['edit', 'approve', 'export'] },
+      { key: 'content_recommend', title: '内容推荐', buttons: ['edit', 'export'] },
+      { key: 'lang_asset_form', title: '多语言素材组', buttons: ['edit', 'export'] }
     ]
   },
   auditor: {
@@ -270,12 +287,35 @@ function getPreviewCellValue(row: Record<string, any>, key: string) {
   return '-';
 }
 
+export function hasSortableColumn(columns: PageColumn[]) {
+  return columns.some(column => column.type === 'sortable');
+}
+
 export function buildColumns(
   routeKey = 'review',
   onAction?: (action: TableAction, row: any) => void,
-  enforcePermission = true
+  enforcePermission = true,
+  sortContext?: SortColumnContext
 ) {
   return pageColumns.value.map(column => {
+    if (column.type === 'sortable') {
+      return {
+        title: column.title,
+        key: column.key,
+        width: 168,
+        render: (row: any) =>
+          h(SortableColumnCell, {
+            entityId: String(row.id),
+            index: sortContext?.getIndex(row) ?? -1,
+            total: sortContext?.total ?? 0,
+            disabled: Boolean(sortContext?.disabled),
+            submitting: Boolean(sortContext?.submitting),
+            onAction: (action: 'drag-sort' | 'sortTop' | 'sort-up' | 'sort-down') =>
+              sortContext?.onSortAction(action, row)
+          })
+      };
+    }
+
     if (column.type === 'tag') {
       return {
         title: column.title,

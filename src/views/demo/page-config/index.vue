@@ -3,13 +3,19 @@ import { computed, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { defaultPageColumns, pageColumns } from '../shared';
 import {
+  contentRecommendColumns,
+  contentRecommendSearchSchema
+} from '../list-sort/contentRecommendSchema';
+import {
   PAGE_CONFIG_STORAGE_KEYS,
   defaultFormSchema,
+  defaultLangAssetFormSchema,
   defaultPageMeta,
   defaultSearchSchema,
   pageTemplateOptions,
   pageTypeOptions
 } from './constants';
+import { assertValidFormSchema } from './formSchemaGuard';
 import FormConfigDesigner from './components/FormConfigDesigner.vue';
 import FormRuleModal from './components/FormRuleModal.vue';
 import FormRuntimePreview from './components/FormRuntimePreview.vue';
@@ -54,6 +60,7 @@ const {
   configuredActions,
   formActions,
   getNumberRangeValue,
+  handleSortReorder,
   hiddenActions,
   moveActionField,
   movePreferenceColumn,
@@ -77,7 +84,12 @@ const {
   selectedColumnIndex,
   selectedSearchIndex,
   setCurrentRouteKey,
+  setFailNext: setSortFailNext,
   setTableConfig,
+  sortBlockedReason,
+  sortFailNext,
+  sortSubmitting,
+  sortableEnabled,
   submitTableAction,
   tableDensity,
   tableEditorMode,
@@ -95,10 +107,14 @@ const {
 
 const {
   conditionFieldOptions,
+  failNextSave,
   formErrors,
   formJson,
   formModel,
+  formSaveError,
   formSchema,
+  formSubmitting,
+  hasLangAssetGroup,
   ruleModalVisible,
   selectedField,
   selectedIndex,
@@ -111,10 +127,11 @@ const {
   removeField,
   resetFormSchema,
   saveRules,
+  setFailNext: setFormFailNext,
   setFormConfig,
   submitForm,
   updateOptions
-} = useFormConfig();
+} = useFormConfig(() => activePageKey.value);
 
 const versionModalVisible = ref(false);
 const publishLoading = ref(false);
@@ -131,6 +148,11 @@ const newPageModel = reactive({
   template: 'review'
 });
 const pageTemplateSelectOptions = pageTemplateOptions.map(item => ({ label: item.label, value: item.value }));
+
+watch(() => newPageModel.template, template => {
+  if (pageMetaModalMode.value !== 'create') return;
+  newPageModel.pageType = template === 'lang-asset-form' ? 'form' : template === 'content-recommend' ? 'table' : 'table-form';
+});
 
 function createPageConfig(partial?: Partial<PageConfig>): PageConfig {
   return {
@@ -201,6 +223,34 @@ function createBlankTemplate(partial?: Partial<PageConfig>): PageConfig {
   });
 }
 
+function createContentRecommendTemplate(partial?: Partial<PageConfig>): PageConfig {
+  return createPageConfig({
+    pageKey: 'content-recommend',
+    pageName: '内容推荐列表',
+    routeKey: 'content_recommend',
+    routePath: '/demo/runtime/content-recommend',
+    pageType: 'table',
+    table: cloneJson(contentRecommendColumns),
+    form: [],
+    search: cloneJson(contentRecommendSearchSchema),
+    ...partial
+  });
+}
+
+function createLangAssetFormTemplate(partial?: Partial<PageConfig>): PageConfig {
+  return createPageConfig({
+    pageKey: 'lang-asset-form',
+    pageName: '多语言素材组',
+    routeKey: 'lang_asset_form',
+    routePath: '/demo/runtime/lang-asset-form',
+    pageType: 'form',
+    table: [],
+    form: cloneJson(defaultLangAssetFormSchema),
+    search: [],
+    ...partial
+  });
+}
+
 function normalizePageConfig(page: Partial<PageConfig>, index = 0): PageConfig {
   const fallback = createPageConfig();
   const pageKey = page.pageKey || (index === 0 ? defaultPageMeta.pageKey : `page_${index + 1}`);
@@ -210,9 +260,9 @@ function normalizePageConfig(page: Partial<PageConfig>, index = 0): PageConfig {
     routeKey: page.routeKey || pageKey,
     routePath: page.routePath || `/demo/runtime/${pageKey}`,
     pageType: page.pageType || 'table-form',
-    table: cloneJson(page.table?.length ? page.table : fallback.table),
-    form: cloneJson(page.form || fallback.form),
-    search: cloneJson(page.search || defaultSearchSchema)
+    table: cloneJson(Array.isArray(page.table) ? page.table : fallback.table),
+    form: cloneJson(Array.isArray(page.form) ? page.form : fallback.form),
+    search: cloneJson(Array.isArray(page.search) ? page.search : defaultSearchSchema)
   };
 }
 
@@ -238,7 +288,10 @@ function normalizeSnapshot(value: ConfigSnapshot | LegacyConfigSnapshot | null):
     };
   }
 
-  return { activePageKey: defaultPageMeta.pageKey, pages: [createPageConfig()] };
+  return {
+    activePageKey: defaultPageMeta.pageKey,
+    pages: [createPageConfig(), createContentRecommendTemplate(), createLangAssetFormTemplate()]
+  };
 }
 
 const storedPublished = loadStoredValue<ConfigSnapshot | LegacyConfigSnapshot>(PAGE_CONFIG_STORAGE_KEYS.published);
@@ -385,6 +438,8 @@ function buildPageFromTemplate(): PageConfig {
     pageType: newPageModel.pageType
   };
   if (newPageModel.template === 'operations') return createOperationTemplate(meta);
+  if (newPageModel.template === 'content-recommend') return createContentRecommendTemplate(meta);
+  if (newPageModel.template === 'lang-asset-form') return createLangAssetFormTemplate(meta);
   if (newPageModel.template === 'blank') return createBlankTemplate(meta);
 
   return createPageConfig(meta);
@@ -482,12 +537,12 @@ function applyJson() {
         setTableConfig(next.columns, next.search);
       }
     } else {
-      if (!Array.isArray(next)) throw new Error('表单配置必须是数组');
-      setFormConfig(next);
+      // 非法配置拒绝应用，并保留原有效配置（不只依赖 TypeScript）
+      setFormConfig(assertValidFormSchema(next));
     }
     window.$message?.success('Schema 已应用');
   } catch (error: any) {
-    window.$message?.error(error.message || 'JSON 格式错误');
+    window.$message?.error(error.message || 'JSON 格式错误，已保留原有效配置');
   }
 }
 
@@ -500,6 +555,9 @@ function validateConfiguration() {
   if (duplicateValues(pages.value.map(page => page.routeKey)).length) errors.push('权限 routeKey 存在空值或重复');
 
   pages.value.forEach(page => {
+    try { assertValidFormSchema(page.form); } catch (error) {
+      errors.push(`“${page.pageName}”${error instanceof Error ? error.message : '表单配置非法'}`);
+    }
     const actions = page.table.find(column => column.type === 'action')?.actions || [];
     if (duplicateValues(page.table.map(column => column.key)).length)
       errors.push(`“${page.pageName}”表格列字段名存在空值或重复`);
@@ -743,6 +801,12 @@ function previewRuntimePage() {
           :reset-table-preference="resetTablePreference"
           :move-preference-column="movePreferenceColumn"
           :open-permission-config="openPermissionConfig"
+          :sortable-enabled="sortableEnabled"
+          :sort-blocked-reason="sortBlockedReason"
+          :sort-submitting="sortSubmitting"
+          :sort-fail-next="sortFailNext"
+          :handle-sort-reorder="handleSortReorder"
+          :set-fail-next="setSortFailNext"
         />
       </div>
 
@@ -782,6 +846,11 @@ function previewRuntimePage() {
             :form-errors="formErrors"
             :visible-fields="visibleFields"
             :submit-form="submitForm"
+            :form-submitting="formSubmitting"
+            :form-save-error="formSaveError"
+            :has-lang-asset-group="hasLangAssetGroup"
+            :fail-next-save="failNextSave"
+            :set-fail-next="setFormFailNext"
           />
         </div>
       </template>

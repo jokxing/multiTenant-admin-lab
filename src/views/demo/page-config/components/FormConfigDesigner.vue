@@ -104,6 +104,21 @@ function selectField(index: number) {
             @update:value="updateOptions"
           />
         </NFormItem>
+        <template v-if="selectedField.type === 'lang-asset-group'">
+          <NFormItem label="主语言">
+            <NSelect
+              v-model:value="selectedField.primaryLang"
+              :options="[
+                { label: '简体中文', value: 'zh-CN' },
+                { label: '繁体中文', value: 'zh-TW' },
+                { label: 'English', value: 'en' }
+              ]"
+            />
+          </NFormItem>
+          <NAlert type="info" :bordered="false">
+            运行时渲染可复用多语言素材组组件：标题 / 说明 / 本地素材选择，切换语言保留输入。
+          </NAlert>
+        </template>
       </NForm>
     </aside>
   </div>

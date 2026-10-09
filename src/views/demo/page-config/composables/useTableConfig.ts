@@ -4,6 +4,7 @@ import {
   activeRole,
   buildColumns,
   canUse,
+  hasSortableColumn,
   pageColumns,
   resetPageColumns,
   reviewRows,
@@ -11,6 +12,8 @@ import {
   type PageColumn,
   type TableAction
 } from '../../shared';
+import { contentRecommendRows } from '../../list-sort/contentRecommendStore';
+import { useListSortActions } from '../../list-sort/useListSortActions';
 import { PAGE_CONFIG_STORAGE_KEYS, defaultSearchSchema } from '../constants';
 import type { SearchField } from '../types';
 
@@ -78,8 +81,36 @@ export function useTableConfig() {
     storedTablePreference?.visible || pageColumns.value.map(column => column.key)
   );
   const columnOrder = ref<string[]>(storedTablePreference?.order || pageColumns.value.map(column => column.key));
+  const sortableEnabled = computed(() => hasSortableColumn(pageColumns.value));
+  const hasActiveFilters = computed(() =>
+    searchSchema.value.some(field => {
+      const value = searchModel[field.key];
+      return !isEmptySearchValue(value);
+    })
+  );
+  const listSort = useListSortActions({
+    rows: contentRecommendRows,
+    isFiltered: hasActiveFilters,
+    onSuccess: message => window.$message?.success(message),
+    onError: message => window.$message?.error(message)
+  });
   const baseColumns = computed(() =>
-    buildColumns(currentRouteKey.value, executeTableAction, tablePreviewMode.value === 'role')
+    buildColumns(
+      currentRouteKey.value,
+      executeTableAction,
+      tablePreviewMode.value === 'role',
+      sortableEnabled.value
+        ? {
+            disabled: !listSort.sortEnabled.value,
+            submitting: listSort.submitting.value,
+            total: contentRecommendRows.value.length,
+            getIndex: row => listSort.getRowIndex(String(row.id)),
+            onSortAction: (action, row) => {
+              void listSort.dispatchSortAction(action, String(row.id));
+            }
+          }
+        : undefined
+    )
   );
   const columns = computed(() => {
     const columnMap = new Map(baseColumns.value.map((column: any) => [String(column.key), column]));
@@ -106,15 +137,17 @@ export function useTableConfig() {
     () => formActions.value.find(action => action.key === selectedActionKey.value) || formActions.value[0]
   );
   const selectedActionField = computed(() => selectedTableAction.value?.formSchema?.[selectedActionFieldIndex.value]);
-  const runtimeRows = computed(() => {
-    const rows =
-      tableScale.value === 4
-        ? reviewRows.value
-        : Array.from({ length: 200 }, (_, index) => {
-            const source = reviewRows.value[index % reviewRows.value.length];
-            return { ...source, id: 1001 + index, title: `${source.title} ${String(index + 1).padStart(3, '0')}` };
-          });
-    return rows.filter(row =>
+  const sourceRows = computed(() => {
+    if (sortableEnabled.value) return contentRecommendRows.value;
+    if (tableScale.value === 4) return reviewRows.value;
+    return Array.from({ length: 200 }, (_, index) => {
+      const source = reviewRows.value[index % reviewRows.value.length];
+      return { ...source, id: 1001 + index, title: `${source.title} ${String(index + 1).padStart(3, '0')}` };
+    });
+  });
+
+  const runtimeRows = computed(() =>
+    sourceRows.value.filter(row =>
       searchSchema.value.every(field => {
         const value = searchModel[field.key];
         if (isEmptySearchValue(value)) return true;
@@ -130,14 +163,16 @@ export function useTableConfig() {
           const rowValue = Number((row as any)[field.targetKey || field.key] ?? 0);
           return (min == null || rowValue >= min) && (max == null || rowValue <= max);
         }
-        if (field.key === 'keyword')
-          return `${row.id}${row.title}${row.tenant}`.toLowerCase().includes(String(value).trim().toLowerCase());
+        if (field.key === 'keyword') {
+          const haystack = `${row.id}${(row as any).title ?? ''}${(row as any).tenant ?? ''}${(row as any).channel ?? ''}`;
+          return haystack.toLowerCase().includes(String(value).trim().toLowerCase());
+        }
         return String((row as any)[field.targetKey || field.key] ?? '')
           .toLowerCase()
           .includes(String(value).toLowerCase());
       })
-    );
-  });
+    )
+  );
 
   function createSearchValue(field: SearchField) {
     if (field.type === 'date-range') return null;
@@ -308,7 +343,7 @@ export function useTableConfig() {
     selectedColumnIndex.value = target;
   }
 
-  function updateColumnType(value: 'text' | 'tag' | 'amount') {
+  function updateColumnType(value: 'text' | 'tag' | 'amount' | 'sortable') {
     if (!selectedColumn.value) return;
     if (value === 'text') {
       delete selectedColumn.value.type;
@@ -322,6 +357,13 @@ export function useTableConfig() {
     } else {
       delete selectedColumn.value.options;
     }
+  }
+
+  async function handleSortReorder(orderedIds: string[], previousRows: Array<{ id: string }>) {
+    await listSort.dispatchSortAction('drag-sort', orderedIds[0] || '', {
+      orderedIds,
+      previousRows
+    });
   }
 
   function parseOptionValue(value: string) {
@@ -507,6 +549,8 @@ export function useTableConfig() {
     configuredActions,
     formActions,
     getNumberRangeValue,
+    handleSortReorder,
+    hasActiveFilters,
     hiddenActions,
     moveActionField,
     movePreferenceColumn,
@@ -535,7 +579,12 @@ export function useTableConfig() {
     selectedSearchField,
     selectedSearchIndex,
     setCurrentRouteKey,
+    setFailNext: listSort.setFailNext,
     setTableConfig,
+    sortBlockedReason: listSort.sortBlockedReason,
+    sortFailNext: listSort.failNext,
+    sortSubmitting: listSort.submitting,
+    sortableEnabled,
     submitTableAction,
     tableDensity,
     tableEditorMode,

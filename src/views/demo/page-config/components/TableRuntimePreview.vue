@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import type { DataTableColumns } from 'naive-ui';
 import type { DemoRole, TableAction } from '../../shared';
+import { contentRecommendRows } from '../../list-sort/contentRecommendStore';
+import { useTableRowDrag } from '../../list-sort/useTableRowDrag';
 import type { SearchField } from '../types';
 
 const props = defineProps<{
@@ -23,6 +25,12 @@ const props = defineProps<{
   resetTablePreference: () => void;
   movePreferenceColumn: (index: number, offset: -1 | 1) => void;
   openPermissionConfig: () => void;
+  sortableEnabled?: boolean;
+  sortBlockedReason?: string;
+  sortSubmitting?: boolean;
+  sortFailNext?: boolean;
+  handleSortReorder?: (orderedIds: string[], previousRows: Array<{ id: string }>) => void | Promise<void>;
+  setFailNext?: (enabled: boolean) => void;
 }>();
 
 const emit = defineEmits<{
@@ -53,6 +61,24 @@ const visibleKeys = computed({
   get: () => props.visibleColumnKeys,
   set: value => emit('update:visibleColumnKeys', value)
 });
+
+const tableWrapRef = ref<HTMLElement | null>(null);
+
+useTableRowDrag({
+  wrapRef: tableWrapRef,
+  rows: contentRecommendRows,
+  disabled: () => Boolean(!props.sortableEnabled || props.sortBlockedReason || props.sortSubmitting),
+  onReorder: async (orderedIds, previousRows) => {
+    await props.handleSortReorder?.(orderedIds, previousRows);
+  }
+});
+
+const failNextModel = computed({
+  get: () => Boolean(props.sortFailNext),
+  set: value => props.setFailNext?.(value)
+});
+
+const scaleDisabled = computed(() => Boolean(props.sortableEnabled));
 </script>
 
 <template>
@@ -115,10 +141,14 @@ const visibleKeys = computed({
           />
         </div>
       </template>
-      <NRadioGroup v-model:value="scale" size="small">
-        <NRadioButton :value="4">4 行</NRadioButton>
-        <NRadioButton :value="200">200 行</NRadioButton>
+      <NRadioGroup v-model:value="scale" size="small" :disabled="scaleDisabled">
+        <NRadioButton :value="4">{{ sortableEnabled ? '完整列表' : '4 行' }}</NRadioButton>
+        <NRadioButton :value="200" :disabled="scaleDisabled">200 行</NRadioButton>
       </NRadioGroup>
+      <NSpace v-if="sortableEnabled" align="center">
+        <NText depth="3">下次保存失败</NText>
+        <NSwitch v-model:value="failNextModel" size="small" />
+      </NSpace>
       <NPopover trigger="click" placement="bottom-end" :width="300">
         <template #trigger>
           <NButton title="个人列设置">
@@ -171,15 +201,33 @@ const visibleKeys = computed({
     <NAlert v-else-if="tablePreviewMode === 'config'" type="info" :bordered="false" class="permission-alert">
       当前展示 Schema 中的全部 {{ configuredActionCount }} 个操作按钮。
     </NAlert>
-    <NDataTable
-      :columns="columns"
-      :data="runtimeRows"
+    <NAlert
+      v-if="sortableEnabled && sortBlockedReason"
+      type="warning"
       :bordered="false"
-      :size="tableDensity"
-      :virtual-scroll="tableScale === 200"
-      :max-height="tableScale === 200 ? 420 : undefined"
-      :row-key="row => row.id"
-    />
+      class="permission-alert"
+    >
+      {{ sortBlockedReason }}
+    </NAlert>
+    <NAlert
+      v-else-if="sortableEnabled"
+      type="success"
+      :bordered="false"
+      class="permission-alert"
+    >
+      已启用配置驱动排序列：支持拖拽、置顶、上移、下移。操作经统一动作入口异步 Mock 保存，本演示限定完整列表内排序。
+    </NAlert>
+    <div ref="tableWrapRef">
+      <NDataTable
+        :columns="columns"
+        :data="runtimeRows"
+        :bordered="false"
+        :size="tableDensity"
+        :virtual-scroll="tableScale === 200 && !sortableEnabled"
+        :max-height="tableScale === 200 && !sortableEnabled ? 420 : undefined"
+        :row-key="row => row.id"
+      />
+    </div>
   </NCard>
 </template>
 

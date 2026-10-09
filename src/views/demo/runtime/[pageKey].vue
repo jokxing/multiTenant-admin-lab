@@ -1,10 +1,30 @@
 <script setup lang="ts">
-import { computed, h, reactive, ref } from 'vue';
+import { computed, h, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { NButton, NInput, NInputNumber, NSelect, NTag } from 'naive-ui';
-import { activeRole, canUse, reviewRows, type PageColumn, type TableAction } from '../shared';
+import {
+  activeRole,
+  canUse,
+  hasSortableColumn,
+  reviewRows,
+  type PageColumn,
+  type TableAction
+} from '../shared';
+import SortableColumnCell from '../list-sort/SortableColumnCell.vue';
+import { contentRecommendRows } from '../list-sort/contentRecommendStore';
+import { useListSortActions } from '../list-sort/useListSortActions';
+import { useTableRowDrag } from '../list-sort/useTableRowDrag';
+import LangAssetGroupField from '../lang-asset/LangAssetGroupField.vue';
+import { createEmptyLangAssetGroup, type LangAssetGroupValue } from '../lang-asset/types';
+import { validateLangAssetGroup } from '../lang-asset/validateLangAssetGroup';
+import {
+  getLangAssetFailNext,
+  loadLangAssetForm,
+  saveLangAssetForm,
+  setLangAssetFailNext
+} from '../lang-asset/langAssetStore';
 import { PAGE_CONFIG_STORAGE_KEYS, defaultSearchSchema } from '../page-config/constants';
-import type { ConfigSnapshot, LegacyConfigSnapshot, PageConfig, SearchField } from '../page-config/types';
+import type { ConfigSnapshot, FormField, LegacyConfigSnapshot, PageConfig, SearchField } from '../page-config/types';
 
 defineOptions({ name: 'DemoRuntime' });
 
@@ -15,6 +35,7 @@ const actionModalVisible = ref(false);
 const activeAction = ref<TableAction | null>(null);
 const activeRow = ref<Record<string, any> | null>(null);
 const actionModel = reactive<Record<string, any>>({});
+const tableWrapRef = ref<HTMLElement | null>(null);
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -58,6 +79,118 @@ const pageConfig = computed(() => publishedPages.value.find(page => page.pageKey
 const searchSchema = computed(() => pageConfig.value?.search || []);
 const actionColumn = computed(() => pageConfig.value?.table.find(column => column.type === 'action'));
 const routeKey = computed(() => pageConfig.value?.routeKey || 'review');
+const sortableEnabled = computed(() => hasSortableColumn(pageConfig.value?.table || []));
+const isFormPage = computed(() => pageConfig.value?.pageType === 'form');
+const formSchema = computed(() => pageConfig.value?.form || []);
+const formModel = reactive<Record<string, any>>({});
+const formErrors = ref<Record<string, string>>({});
+const formSubmitting = ref(false);
+const formSaveError = ref('');
+const formFailNext = ref(getLangAssetFailNext());
+
+function createFormFieldValue(field: FormField) {
+  if (field.type === 'switch') return false;
+  if (field.type === 'lang-asset-group') return createEmptyLangAssetGroup();
+  return null;
+}
+
+function syncRuntimeFormModel() {
+  Object.keys(formModel).forEach(key => {
+    if (!formSchema.value.some(field => field.field === key)) delete formModel[key];
+  });
+  formSchema.value.forEach(field => {
+    if (!(field.field in formModel)) formModel[field.field] = createFormFieldValue(field);
+  });
+  const drafts = loadLangAssetForm(pageKey.value);
+  formSchema.value.filter(field => field.type === 'lang-asset-group').forEach(field => {
+    formModel[field.field] = drafts[field.field] || createEmptyLangAssetGroup();
+  });
+  formErrors.value = {};
+  formSaveError.value = '';
+  formFailNext.value = getLangAssetFailNext();
+}
+
+watch(
+  () => pageConfig.value?.pageKey,
+  () => {
+    if (isFormPage.value) syncRuntimeFormModel();
+  },
+  { immediate: true }
+);
+
+function langFieldErrors(field: FormField) {
+  const mapped: Record<string, string> = {};
+  Object.entries(formErrors.value).forEach(([key, message]) => {
+    const prefix = `${field.field}.`;
+    if (key.startsWith(prefix)) mapped[key.slice(prefix.length)] = message;
+  });
+  return mapped;
+}
+
+function setFormFailNext(enabled: boolean) {
+  formFailNext.value = enabled;
+  setLangAssetFailNext(enabled);
+}
+
+async function submitRuntimeForm() {
+  if (formSubmitting.value) {
+    window.$message?.warning('表单提交中，请勿重复操作');
+    return;
+  }
+
+  const errors: Record<string, string> = {};
+  formSchema.value.forEach(field => {
+    const value = formModel[field.field];
+    if (field.type === 'lang-asset-group') {
+      const groupErrors = validateLangAssetGroup(value as LangAssetGroupValue, field.primaryLang || 'zh-CN', field.languages);
+      Object.entries(groupErrors).forEach(([key, message]) => { errors[`${field.field}.${key}`] = message; });
+      return;
+    }
+    if (field.required && (value === '' || value == null)) {
+      errors[field.field] = field.message || `${field.label}必填`;
+    }
+    if (field.type === 'number' && value != null) {
+      if (field.min != null && value < field.min) errors[field.field] = `${field.label}不能小于 ${field.min}`;
+      if (field.max != null && value > field.max) errors[field.field] = `${field.label}不能大于 ${field.max}`;
+    }
+    if (field.pattern) {
+      try {
+        if (value && !new RegExp(field.pattern).test(String(value))) errors[field.field] = field.message || `${field.label}格式不正确`;
+      } catch { errors[field.field] = `${field.label}的正则表达式非法，请修正配置`; }
+    }
+  });
+  formErrors.value = errors;
+  formSaveError.value = '';
+  if (Object.keys(errors).length) {
+    window.$message?.warning('请先修正表单校验错误');
+    return;
+  }
+
+  const langField = formSchema.value.find(field => field.type === 'lang-asset-group');
+  if (!langField) {
+    window.$message?.success('运行时表单校验通过');
+    return;
+  }
+
+  formSubmitting.value = true;
+  const scope = pageKey.value;
+  try {
+    const result = await saveLangAssetForm(scope, Object.fromEntries(
+      formSchema.value.filter(field => field.type === 'lang-asset-group').map(field => [field.field, formModel[field.field]])
+    ));
+    if (scope !== pageKey.value) return;
+    formFailNext.value = getLangAssetFailNext();
+    if (!result.ok) {
+      formSaveError.value = result.message;
+      window.$message?.error(result.message);
+      return;
+    }
+    Object.assign(formModel, result.value);
+    window.$message?.success('多语言素材组已保存，刷新后可回填');
+  } finally {
+    formSubmitting.value = false;
+  }
+}
 
 function getSearchValue(field: SearchField) {
   if (!(field.key in searchModel)) {
@@ -70,7 +203,7 @@ function getSearchValue(field: SearchField) {
 
 function getCellValue(row: Record<string, any>, key: string) {
   if (row[key] != null && row[key] !== '') return row[key];
-  if (/time|date|created/i.test(key)) return row.createdAt || '-';
+  if (/time|date|created|updated/i.test(key)) return row.updatedAt || row.createdAt || '-';
 
   return '-';
 }
@@ -81,8 +214,30 @@ function isEmptyValue(value: any) {
   return value === '' || value == null;
 }
 
+const hasActiveFilters = computed(() =>
+  searchSchema.value.some(field => !isEmptyValue(searchModel[field.key]))
+);
+
+const {
+  submitting: sortSubmitting,
+  lastError: sortLastError,
+  failNext: sortFailNext,
+  sortEnabled,
+  sortBlockedReason,
+  dispatchSortAction,
+  getRowIndex,
+  setFailNext
+} = useListSortActions({
+  rows: contentRecommendRows,
+  isFiltered: hasActiveFilters,
+  onSuccess: message => window.$message?.success(message),
+  onError: message => window.$message?.error(message)
+});
+
+const sourceRows = computed(() => (sortableEnabled.value ? contentRecommendRows.value : reviewRows.value));
+
 const runtimeRows = computed(() =>
-  reviewRows.value.filter(row =>
+  sourceRows.value.filter(row =>
     searchSchema.value.every(field => {
       const value = searchModel[field.key];
       if (isEmptyValue(value)) return true;
@@ -96,8 +251,10 @@ const runtimeRows = computed(() =>
         const rowValue = Number((row as any)[field.targetKey || field.key] ?? 0);
         return (min == null || rowValue >= min) && (max == null || rowValue <= max);
       }
-      if (field.key === 'keyword')
-        return `${row.id}${row.title}${row.tenant}`.toLowerCase().includes(String(value).trim().toLowerCase());
+      if (field.key === 'keyword') {
+        const haystack = `${row.id}${(row as any).title ?? ''}${(row as any).tenant ?? ''}${(row as any).channel ?? ''}`;
+        return haystack.toLowerCase().includes(String(value).trim().toLowerCase());
+      }
 
       return String((row as any)[field.targetKey || field.key] ?? '')
         .toLowerCase()
@@ -105,6 +262,18 @@ const runtimeRows = computed(() =>
     })
   )
 );
+
+useTableRowDrag({
+  wrapRef: tableWrapRef,
+  rows: contentRecommendRows,
+  disabled: () => Boolean(!sortableEnabled.value || !sortEnabled.value),
+  onReorder: async (orderedIds, previousRows) => {
+    await dispatchSortAction('drag-sort', orderedIds[0] || '', {
+      orderedIds,
+      previousRows
+    });
+  }
+});
 
 function executeAction(action: TableAction, row: Record<string, any>) {
   activeAction.value = action;
@@ -129,6 +298,25 @@ function executeAction(action: TableAction, row: Record<string, any>) {
 }
 
 function createColumn(column: PageColumn) {
+  if (column.type === 'sortable') {
+    return {
+      title: column.title,
+      key: column.key,
+      width: 168,
+      render: (row: Record<string, any>) =>
+        h(SortableColumnCell, {
+          entityId: String(row.id),
+          index: getRowIndex(String(row.id)),
+          total: contentRecommendRows.value.length,
+          disabled: !sortEnabled.value,
+          submitting: sortSubmitting.value,
+          onAction: (action: 'drag-sort' | 'sortTop' | 'sort-up' | 'sort-down') => {
+            void dispatchSortAction(action, String(row.id));
+          }
+        })
+    };
+  }
+
   if (column.type === 'tag') {
     return {
       title: column.title,
@@ -237,67 +425,157 @@ function submitActionForm() {
             <NTag :bordered="false" type="info">{{ pageConfig.routePath }}</NTag>
             <NTag :bordered="false">routeKey: {{ pageConfig.routeKey }}</NTag>
             <NTag :bordered="false">当前角色：{{ activeRole }}</NTag>
+            <NTag v-if="sortableEnabled" :bordered="false" type="success">排序列已启用</NTag>
           </NSpace>
         </div>
         <NAlert type="success" :bordered="false" class="runtime-summary">
-          Schema 列 {{ pageConfig.table.length }} 个，搜索项 {{ pageConfig.search.length }} 个，操作按钮
-          {{ authorizedActionCount }}/{{ configuredActionCount }} 个可见。
+          <template v-if="isFormPage">
+            表单字段 {{ pageConfig.form.length }} 个，pageType: form。
+          </template>
+          <template v-else>
+            Schema 列 {{ pageConfig.table.length }} 个，搜索项 {{ pageConfig.search.length }} 个，操作按钮
+            {{ authorizedActionCount }}/{{ configuredActionCount }} 个可见。
+          </template>
         </NAlert>
       </div>
 
-      <NCard size="small" title="动态查询区" class="runtime-section">
-        <div class="runtime-search">
-          <template v-for="field in searchSchema" :key="`${field.key}-${field.type}`">
-            <NInput
-              v-if="field.type === 'input'"
-              v-model:value="searchModel[field.key]"
-              clearable
-              :placeholder="field.placeholder"
-              class="search-input"
+      <template v-if="isFormPage">
+        <NCard size="small" title="配置驱动表单运行时" class="runtime-section">
+          <NSpace align="center" class="form-toolbar">
+            <NText depth="3">本地 Mock 保存 · 切换语言保留输入 · 非法配置在配置器拒绝应用</NText>
+            <NSpace align="center">
+              <NText>下次保存失败</NText>
+              <NSwitch :value="formFailNext" @update:value="setFormFailNext" />
+              <NTag v-if="formSubmitting" type="warning" :bordered="false">提交中</NTag>
+            </NSpace>
+          </NSpace>
+          <NAlert v-if="formSaveError" type="error" :bordered="false" class="sort-alert">
+            {{ formSaveError }}
+          </NAlert>
+          <NForm label-placement="top" :model="formModel" class="runtime-form">
+            <NFormItem
+              v-for="field in formSchema"
+              :key="field.field"
+              :label="field.label"
+              :required="field.required"
+              :validation-status="formErrors[field.field] ? 'error' : undefined"
+              :feedback="formErrors[field.field]"
             >
-              <template #prefix><SvgIcon icon="mdi:magnify" /></template>
-            </NInput>
-            <NSelect
-              v-else-if="field.type === 'select'"
-              v-model:value="searchModel[field.key]"
-              clearable
-              :placeholder="field.placeholder"
-              :options="field.options || []"
-              class="search-select"
-            />
-            <NDatePicker
-              v-else-if="field.type === 'date-range'"
-              v-model:formatted-value="searchModel[field.key]"
-              type="daterange"
-              clearable
-              value-format="yyyy-MM-dd"
-              :start-placeholder="field.placeholder || '开始日期'"
-              end-placeholder="结束日期"
-              class="search-date"
-            />
-            <div v-else class="search-range">
-              <NInputNumber
-                :value="getSearchValue(field)[0]"
-                clearable
-                :placeholder="`${field.label}最小`"
-                @update:value="value => (getSearchValue(field)[0] = value)"
+              <LangAssetGroupField
+                v-if="field.type === 'lang-asset-group'"
+                :model-value="formModel[field.field]"
+                :primary-lang="field.primaryLang || 'zh-CN'"
+                :languages="field.languages || ['zh-CN', 'zh-TW', 'en']"
+                :errors="langFieldErrors(field)"
+                :disabled="formSubmitting"
+                @update:model-value="value => (formModel[field.field] = value)"
               />
-              <span>-</span>
-              <NInputNumber
-                :value="getSearchValue(field)[1]"
-                clearable
-                :placeholder="`${field.label}最大`"
-                @update:value="value => (getSearchValue(field)[1] = value)"
+              <NInput
+                v-else-if="field.type === 'input' || field.type === 'textarea'"
+                v-model:value="formModel[field.field]"
+                :type="field.type === 'textarea' ? 'textarea' : 'text'"
+                :placeholder="field.placeholder"
               />
-            </div>
-          </template>
-          <NButton secondary @click="Object.keys(searchModel).forEach(key => delete searchModel[key])">重置</NButton>
-        </div>
+              <NSelect
+                v-else-if="field.type === 'select'"
+                v-model:value="formModel[field.field]"
+                :options="field.options || []"
+              />
+              <NInputNumber
+                v-else-if="field.type === 'number'"
+                v-model:value="formModel[field.field]"
+                :min="field.min"
+                :max="field.max"
+                class="w-full"
+              />
+              <NSwitch v-else-if="field.type === 'switch'" v-model:value="formModel[field.field]" />
+              <NDatePicker
+                v-else-if="field.type === 'date'"
+                v-model:formatted-value="formModel[field.field]"
+                type="date"
+                value-format="yyyy-MM-dd"
+                class="w-full"
+              />
+            </NFormItem>
+            <NButton type="primary" :loading="formSubmitting" @click="submitRuntimeForm">保存素材组</NButton>
+          </NForm>
+        </NCard>
+      </template>
+
+      <NCard v-else-if="sortableEnabled" size="small" title="排序演示控制" class="runtime-section">
+        <NSpace align="center" justify="space-between">
+          <NText depth="3">完整列表排序 · 本地异步 Mock 保存 · 稳定实体 ID</NText>
+          <NSpace align="center">
+            <NText>下次保存失败（可控）</NText>
+            <NSwitch :value="sortFailNext" @update:value="setFailNext" />
+            <NTag v-if="sortSubmitting" type="warning" :bordered="false">提交中</NTag>
+          </NSpace>
+        </NSpace>
+        <NAlert v-if="sortBlockedReason" type="warning" :bordered="false" class="sort-alert">
+          {{ sortBlockedReason }}
+        </NAlert>
+        <NAlert v-else-if="sortLastError" type="error" :bordered="false" class="sort-alert">
+          {{ sortLastError }}
+        </NAlert>
       </NCard>
 
-      <NCard size="small" title="动态列表" class="runtime-section">
-        <NDataTable :columns="columns" :data="runtimeRows" :bordered="false" :row-key="row => row.id" />
-      </NCard>
+      <template v-if="!isFormPage">
+        <NCard size="small" title="动态查询区" class="runtime-section">
+          <div class="runtime-search">
+            <template v-for="field in searchSchema" :key="`${field.key}-${field.type}`">
+              <NInput
+                v-if="field.type === 'input'"
+                v-model:value="searchModel[field.key]"
+                clearable
+                :placeholder="field.placeholder"
+                class="search-input"
+              >
+                <template #prefix><SvgIcon icon="mdi:magnify" /></template>
+              </NInput>
+              <NSelect
+                v-else-if="field.type === 'select'"
+                v-model:value="searchModel[field.key]"
+                clearable
+                :placeholder="field.placeholder"
+                :options="field.options || []"
+                class="search-select"
+              />
+              <NDatePicker
+                v-else-if="field.type === 'date-range'"
+                v-model:formatted-value="searchModel[field.key]"
+                type="daterange"
+                clearable
+                value-format="yyyy-MM-dd"
+                :start-placeholder="field.placeholder || '开始日期'"
+                end-placeholder="结束日期"
+                class="search-date"
+              />
+              <div v-else class="search-range">
+                <NInputNumber
+                  :value="getSearchValue(field)[0]"
+                  clearable
+                  :placeholder="`${field.label}最小`"
+                  @update:value="value => (getSearchValue(field)[0] = value)"
+                />
+                <span>-</span>
+                <NInputNumber
+                  :value="getSearchValue(field)[1]"
+                  clearable
+                  :placeholder="`${field.label}最大`"
+                  @update:value="value => (getSearchValue(field)[1] = value)"
+                />
+              </div>
+            </template>
+            <NButton secondary @click="Object.keys(searchModel).forEach(key => delete searchModel[key])">重置</NButton>
+          </div>
+        </NCard>
+
+        <NCard size="small" title="动态列表" class="runtime-section">
+          <div ref="tableWrapRef">
+            <NDataTable :columns="columns" :data="runtimeRows" :bordered="false" :row-key="row => row.id" />
+          </div>
+        </NCard>
+      </template>
     </template>
 
     <NModal
@@ -355,6 +633,20 @@ function submitActionForm() {
 
 .runtime-section {
   margin-top: 16px;
+}
+
+.sort-alert {
+  margin-top: 12px;
+}
+
+.form-toolbar {
+  margin-bottom: 12px;
+  width: 100%;
+  justify-content: space-between;
+}
+
+.runtime-form {
+  max-width: 760px;
 }
 
 .runtime-search {
