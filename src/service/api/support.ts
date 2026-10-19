@@ -50,7 +50,17 @@ async function supportRequest<T>(url: string, options?: RequestInit) {
     }
   });
 
-  if (!response.ok) throw new Error(await response.text());
+  if (!response.ok) {
+    const messages: Record<number, string> = {
+      401: '登录状态已失效，请重新登录后重试。',
+      403: '你没有此会话的访问权限。',
+      404: '会话不存在或已被移除。',
+      409: '当前会话无法执行此操作，请刷新会话状态。',
+      422: '请求内容有误，请检查后重试。',
+      503: '服务暂时不可用，请稍后重试。'
+    };
+    throw new Error(messages[response.status] || '请求未完成，请稍后重试。');
+  }
 
   return (await response.json()) as T;
 }
@@ -91,7 +101,7 @@ export function closeSupportConversation(id: string) {
 }
 
 export function sendSupportAgentMessage(id: string, content: string) {
-  return supportRequest<SupportConversationResponse>(`${getConversationUrl(id)}/messages`, {
+  return supportRequest<{ message: SupportMessage }>(`${getConversationUrl(id)}/messages`, {
     method: 'POST',
     body: JSON.stringify({ sender: 'agent', content })
   });

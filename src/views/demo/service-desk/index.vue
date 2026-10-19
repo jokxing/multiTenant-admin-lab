@@ -19,6 +19,10 @@ const selected = ref<SupportConversation | null>(null);
 const loading = ref(false);
 const sending = ref(false);
 const connected = ref(false);
+const refreshing = ref(false);
+const acting = ref(false);
+const loadError = ref('');
+const sendError = ref('');
 const draft = ref('');
 const messagePanel = ref<HTMLElement | null>(null);
 const quickReplies = [
@@ -26,7 +30,14 @@ const quickReplies = [
   '该活动建议提前预约，我可以继续为您确认可用时间。'
 ];
 let eventSource: EventSource | null = null;
-let realtimeRefreshing = false;
+let refreshTask: Promise<void> | null = null;
+let refreshPending = false;
+let disposed = false;
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error && !(error instanceof TypeError)) return error.message;
+  return '请求未完成，请检查网络或确认移动端演示服务已启动。';
+}
 
 const statusMeta = {
   waiting: { label: '待接入', type: 'warning' as const },
@@ -39,8 +50,12 @@ const unreadCount = computed(() => conversations.value.reduce((total, item) => t
 
 async function loadConversations() {
   const response = await fetchSupportConversations();
+  if (disposed) return;
   conversations.value = response.records;
-  if (!selectedId.value && response.records[0]) selectedId.value = response.records[0].id;
+  if (!response.records.some(item => item.id === selectedId.value)) {
+    selectedId.value = response.records[0]?.id || '';
+    selected.value = null;
+  }
 }
 
 async function loadConversation(id = selectedId.value) {
@@ -48,10 +63,11 @@ async function loadConversation(id = selectedId.value) {
   loading.value = true;
   try {
     const response = await fetchSupportConversation(id);
+    if (disposed || id !== selectedId.value) return;
     selected.value = response.conversation;
-    selectedId.value = id;
-    await markSupportConversationRead(id, 'agent');
-    await loadConversations();
+    const readResponse = await markSupportConversationRead(id, 'agent');
+    if (disposed || id !== selectedId.value) return;
+    selected.value = readResponse.conversation;
     await nextTick();
     messagePanel.value?.lastElementChild?.scrollIntoView({ behavior: 'smooth' });
   } finally {
@@ -59,28 +75,85 @@ async function loadConversation(id = selectedId.value) {
   }
 }
 
+// Coalesce events, retaining a trailing refresh for events received during a request.
+function refreshDesk(): Promise<void> {
+  if (disposed) return Promise.resolve();
+  connectRealtime();
+  refreshPending = true;
+  if (refreshTask) return refreshTask;
+  refreshing.value = true;
+  refreshTask = Promise.resolve()
+    .then(async () => {
+      do {
+        refreshPending = false;
+        try {
+          await loadConversations();
+          if (disposed) return;
+          await loadConversation();
+          if (!disposed) loadError.value = '';
+        } catch (error) {
+          if (!disposed) loadError.value = errorMessage(error);
+        }
+      } while (refreshPending && !disposed);
+    })
+    .finally(() => {
+      refreshTask = null;
+      refreshing.value = false;
+    });
+  return refreshTask;
+}
+
+async function selectConversation(id: string) {
+  if (id !== selectedId.value) {
+    selectedId.value = id;
+    selected.value = null;
+    draft.value = '';
+    sendError.value = '';
+  }
+  await refreshDesk();
+}
+
 async function claimConversation() {
-  if (!selected.value) return;
-  await claimSupportConversation(selected.value.id);
-  window.$message?.success('会话已接入');
-  await loadConversation();
+  if (!selected.value || acting.value) return;
+  acting.value = true;
+  try {
+    await claimSupportConversation(selected.value.id);
+    window.$message?.success('会话已接入');
+    await refreshDesk();
+  } catch (error) {
+    loadError.value = errorMessage(error);
+  } finally {
+    acting.value = false;
+  }
 }
 
 async function closeConversation() {
-  if (!selected.value) return;
-  await closeSupportConversation(selected.value.id);
-  window.$message?.success('会话已结束');
-  await loadConversation();
+  if (!selected.value || acting.value) return;
+  acting.value = true;
+  try {
+    await closeSupportConversation(selected.value.id);
+    window.$message?.success('会话已结束');
+    await refreshDesk();
+  } catch (error) {
+    loadError.value = errorMessage(error);
+  } finally {
+    acting.value = false;
+  }
 }
 
 async function sendMessage() {
   const content = draft.value.trim();
   if (!selected.value || selected.value.status !== 'active' || !content || sending.value) return;
+  const id = selected.value.id;
+  const submittedDraft = draft.value;
+  sendError.value = '';
   sending.value = true;
   try {
-    draft.value = '';
-    await sendSupportAgentMessage(selected.value.id, content);
-    await loadConversation();
+    await sendSupportAgentMessage(id, content);
+    if (selectedId.value === id && draft.value === submittedDraft) draft.value = '';
+    await refreshDesk();
+  } catch (error) {
+    if (selectedId.value === id) sendError.value = errorMessage(error);
   } finally {
     sending.value = false;
   }
@@ -91,21 +164,19 @@ function formatTime(value: string) {
 }
 
 function connectRealtime() {
+  if (disposed || (eventSource && eventSource.readyState !== EventSource.CLOSED)) return;
+  eventSource?.close();
   eventSource = new EventSource(getSupportEventUrl());
   eventSource.addEventListener('open', () => {
     connected.value = true;
+    void refreshDesk();
   });
-  eventSource.addEventListener('message', async (message: MessageEvent) => {
-    const event = JSON.parse(message.data) as { type?: string; conversationId?: string };
-    if (!event.conversationId || realtimeRefreshing) return;
-    realtimeRefreshing = true;
+  eventSource.addEventListener('message', (message: MessageEvent) => {
     try {
-      await loadConversations();
-      if (event.conversationId === selectedId.value) await loadConversation();
+      const event = JSON.parse(message.data) as { type?: string; conversationId?: string } | null;
+      if (event?.conversationId) void refreshDesk();
     } catch {
-      connected.value = false;
-    } finally {
-      realtimeRefreshing = false;
+      // Ignore malformed events; subsequent valid events still refresh the desk.
     }
   });
   eventSource.addEventListener('error', () => {
@@ -113,17 +184,23 @@ function connectRealtime() {
   });
 }
 
-onMounted(async () => {
-  try {
-    await loadConversations();
-    await loadConversation();
-    connectRealtime();
-  } catch {
-    window.$message?.error('无法连接移动端演示服务，请确认 4180 服务已启动');
-  }
+function handleOnline() {
+  eventSource?.close();
+  eventSource = null;
+  connected.value = false;
+  void refreshDesk();
+}
+
+onMounted(() => {
+  window.addEventListener('online', handleOnline);
+  void refreshDesk();
 });
 
-onBeforeUnmount(() => eventSource?.close());
+onBeforeUnmount(() => {
+  disposed = true;
+  window.removeEventListener('online', handleOnline);
+  eventSource?.close();
+});
 </script>
 
 <template>
@@ -139,6 +216,11 @@ onBeforeUnmount(() => eventSource?.close());
       </NTag>
     </header>
 
+    <NAlert v-if="loadError" type="error" :bordered="false" role="alert">
+      {{ loadError }}
+      <NButton size="small" :loading="refreshing" @click="refreshDesk">重新加载</NButton>
+    </NAlert>
+
     <section class="metric-grid">
       <NCard size="small"><NStatistic label="全部会话" :value="conversations.length" /></NCard>
       <NCard size="small"><NStatistic label="待接入" :value="waitingCount" /></NCard>
@@ -149,7 +231,7 @@ onBeforeUnmount(() => eventSource?.close());
     <section class="desk-layout">
       <NCard title="会话队列" size="small" content-class="conversation-card-content">
         <template #header-extra>
-          <NButton quaternary circle title="刷新" @click="loadConversations">
+          <NButton quaternary circle title="刷新" :loading="refreshing" @click="refreshDesk">
             <template #icon><SvgIcon icon="mdi:refresh" /></template>
           </NButton>
         </template>
@@ -157,8 +239,9 @@ onBeforeUnmount(() => eventSource?.close());
           v-for="conversation in conversations"
           :key="conversation.id"
           type="button"
-          class="conversation-item" :class="[{ active: conversation.id === selectedId }]"
-          @click="loadConversation(conversation.id)"
+          class="conversation-item"
+          :class="[{ active: conversation.id === selectedId }]"
+          @click="selectConversation(conversation.id)"
         >
           <span class="avatar"><SvgIcon icon="mdi:account-outline" /></span>
           <span class="conversation-main">
@@ -187,10 +270,18 @@ onBeforeUnmount(() => eventSource?.close());
         </template>
         <template #header-extra>
           <NSpace>
-            <NButton v-if="selected.status === 'waiting'" type="primary" size="small" @click="claimConversation">
+            <NButton
+              v-if="selected.status === 'waiting'"
+              type="primary"
+              size="small"
+              :loading="acting"
+              @click="claimConversation"
+            >
               接入会话
             </NButton>
-            <NButton v-if="selected.status === 'active'" size="small" @click="closeConversation">结束会话</NButton>
+            <NButton v-if="selected.status === 'active'" size="small" :loading="acting" @click="closeConversation">
+              结束会话
+            </NButton>
           </NSpace>
         </template>
 
@@ -199,7 +290,8 @@ onBeforeUnmount(() => eventSource?.close());
             <article
               v-for="message in selected.messages"
               :key="message.id"
-              class="message-row" :class="[`is-${message.sender}`]"
+              class="message-row"
+              :class="[`is-${message.sender}`]"
             >
               <span v-if="message.sender !== 'system'">{{ message.senderName }}</span>
               <p>{{ message.content }}</p>
@@ -209,6 +301,9 @@ onBeforeUnmount(() => eventSource?.close());
         </NSpin>
 
         <div v-if="selected.status === 'active'" class="reply-panel">
+          <NAlert v-if="sendError" type="error" :bordered="false" role="alert">
+            {{ sendError }} 输入内容已保留，可重新发送。
+          </NAlert>
           <div class="quick-replies">
             <span>快捷回复</span>
             <NButton v-for="reply in quickReplies" :key="reply" size="tiny" @click="draft = reply">
