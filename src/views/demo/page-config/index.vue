@@ -2,7 +2,10 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { defaultPageColumns, pageColumns } from '../shared';
-import { contentRecommendColumns, contentRecommendSearchSchema } from '../list-sort/contentRecommendSchema';
+import {
+  contentRecommendColumns,
+  contentRecommendSearchSchema
+} from '../list-sort/contentRecommendSchema';
 import { activityMaterialsPageConfig } from '../activity-materials/schema';
 import {
   PAGE_CONFIG_STORAGE_KEYS,
@@ -103,8 +106,6 @@ const {
   visibleColumnKeys
 } = useTableConfig();
 
-const activePageKey = ref(defaultPageMeta.pageKey);
-
 const {
   conditionFieldOptions,
   failNextSave,
@@ -138,6 +139,7 @@ const publishLoading = ref(false);
 const pageCreateModalVisible = ref(false);
 const pageMetaModalMode = ref<'create' | 'edit'>('create');
 const editingPageKey = ref('');
+const activePageKey = ref(defaultPageMeta.pageKey);
 const newPageModel = reactive({
   pageName: '',
   pageKey: '',
@@ -148,18 +150,15 @@ const newPageModel = reactive({
 });
 const pageTemplateSelectOptions = pageTemplateOptions.map(item => ({ label: item.label, value: item.value }));
 
-watch(
-  () => newPageModel.template,
-  template => {
-    if (pageMetaModalMode.value !== 'create') return;
-    newPageModel.pageType =
-      template === 'lang-asset-form' || template === 'activity-materials'
-        ? 'form'
-        : template === 'content-recommend'
-          ? 'table'
-          : 'table-form';
-  }
-);
+watch(() => newPageModel.template, template => {
+  if (pageMetaModalMode.value !== 'create') return;
+  newPageModel.pageType =
+    template === 'lang-asset-form' || template === 'activity-materials'
+      ? 'form'
+      : template === 'content-recommend'
+        ? 'table'
+        : 'table-form';
+});
 
 function createPageConfig(partial?: Partial<PageConfig>): PageConfig {
   return {
@@ -573,9 +572,7 @@ function validateConfiguration() {
   if (duplicateValues(pages.value.map(page => page.routeKey)).length) errors.push('权限 routeKey 存在空值或重复');
 
   pages.value.forEach(page => {
-    try {
-      assertValidFormSchema(page.form);
-    } catch (error) {
+    try { assertValidFormSchema(page.form); } catch (error) {
       errors.push(`“${page.pageName}”${error instanceof Error ? error.message : '表单配置非法'}`);
     }
     const actions = page.table.find(column => column.type === 'action')?.actions || [];

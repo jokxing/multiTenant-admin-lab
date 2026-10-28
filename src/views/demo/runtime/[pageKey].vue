@@ -2,7 +2,14 @@
 import { computed, h, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { NButton, NInput, NInputNumber, NSelect, NTag } from 'naive-ui';
-import { activeRole, canUse, hasSortableColumn, reviewRows, type PageColumn, type TableAction } from '../shared';
+import {
+  activeRole,
+  canUse,
+  hasSortableColumn,
+  reviewRows,
+  type PageColumn,
+  type TableAction
+} from '../shared';
 import SortableColumnCell from '../list-sort/SortableColumnCell.vue';
 import { contentRecommendRows } from '../list-sort/contentRecommendStore';
 import { useListSortActions } from '../list-sort/useListSortActions';
@@ -106,17 +113,15 @@ function createFormFieldValue(field: FormField) {
 
 function syncRuntimeFormModel() {
   Object.keys(formModel).forEach(key => {
-    if (!formSchema.value.some(field => field.field === key)) Reflect.deleteProperty(formModel, key);
+    if (!formSchema.value.some(field => field.field === key)) delete formModel[key];
   });
   formSchema.value.forEach(field => {
     if (!(field.field in formModel)) formModel[field.field] = createFormFieldValue(field);
   });
   const drafts = loadLangAssetForm(pageKey.value);
-  formSchema.value
-    .filter(field => field.type === 'lang-asset-group')
-    .forEach(field => {
-      formModel[field.field] = drafts[field.field] || createEmptyLangAssetGroup();
-    });
+  formSchema.value.filter(field => field.type === 'lang-asset-group').forEach(field => {
+    formModel[field.field] = drafts[field.field] || createEmptyLangAssetGroup();
+  });
   formErrors.value = {};
   formSaveError.value = '';
   formFailNext.value = getLangAssetFailNext();
@@ -162,14 +167,8 @@ async function submitRuntimeForm() {
   formSchema.value.forEach(field => {
     const value = formModel[field.field];
     if (field.type === 'lang-asset-group') {
-      const groupErrors = validateLangAssetGroup(
-        value as LangAssetGroupValue,
-        field.primaryLang || 'zh-CN',
-        field.languages
-      );
-      Object.entries(groupErrors).forEach(([key, message]) => {
-        errors[`${field.field}.${key}`] = message;
-      });
+      const groupErrors = validateLangAssetGroup(value as LangAssetGroupValue, field.primaryLang || 'zh-CN', field.languages);
+      Object.entries(groupErrors).forEach(([key, message]) => { errors[`${field.field}.${key}`] = message; });
       return;
     }
     if (field.required && (value === '' || value == null)) {
@@ -181,11 +180,8 @@ async function submitRuntimeForm() {
     }
     if (field.pattern) {
       try {
-        if (value && !new RegExp(field.pattern).test(String(value)))
-          errors[field.field] = field.message || `${field.label}格式不正确`;
-      } catch {
-        errors[field.field] = `${field.label}的正则表达式非法，请修正配置`;
-      }
+        if (value && !new RegExp(field.pattern).test(String(value))) errors[field.field] = field.message || `${field.label}格式不正确`;
+      } catch { errors[field.field] = `${field.label}的正则表达式非法，请修正配置`; }
     }
   });
   formErrors.value = errors;
@@ -204,14 +200,9 @@ async function submitRuntimeForm() {
   formSubmitting.value = true;
   const scope = pageKey.value;
   try {
-    const result = await saveLangAssetForm(
-      scope,
-      Object.fromEntries(
-        formSchema.value
-          .filter(field => field.type === 'lang-asset-group')
-          .map(field => [field.field, formModel[field.field]])
-      )
-    );
+    const result = await saveLangAssetForm(scope, Object.fromEntries(
+      formSchema.value.filter(field => field.type === 'lang-asset-group').map(field => [field.field, formModel[field.field]])
+    ));
     if (scope !== pageKey.value) return;
     formFailNext.value = getLangAssetFailNext();
     if (!result.ok) {
@@ -248,7 +239,9 @@ function isEmptyValue(value: any) {
   return value === '' || value == null;
 }
 
-const hasActiveFilters = computed(() => searchSchema.value.some(field => !isEmptyValue(searchModel[field.key])));
+const hasActiveFilters = computed(() =>
+  searchSchema.value.some(field => !isEmptyValue(searchModel[field.key]))
+);
 
 const {
   submitting: sortSubmitting,
@@ -322,7 +315,7 @@ function executeAction(action: TableAction, row: Record<string, any>) {
     return;
   }
 
-  Object.keys(actionModel).forEach(key => Reflect.deleteProperty(actionModel, key));
+  Object.keys(actionModel).forEach(key => delete actionModel[key]);
   action.formSchema?.forEach(field => {
     actionModel[field.field] = row[field.field] ?? null;
   });
@@ -461,7 +454,9 @@ function submitActionForm() {
           </NSpace>
         </div>
         <NAlert type="success" :bordered="false" class="runtime-summary">
-          <template v-if="isFormPage">表单字段 {{ pageConfig.form.length }} 个，pageType: form。</template>
+          <template v-if="isFormPage">
+            表单字段 {{ pageConfig.form.length }} 个，pageType: form。
+          </template>
           <template v-else>
             Schema 列 {{ pageConfig.table.length }} 个，搜索项 {{ pageConfig.search.length }} 个，操作按钮
             {{ authorizedActionCount }}/{{ configuredActionCount }} 个可见。
