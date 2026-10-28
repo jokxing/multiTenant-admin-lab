@@ -2,10 +2,8 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { defaultPageColumns, pageColumns } from '../shared';
-import {
-  contentRecommendColumns,
-  contentRecommendSearchSchema
-} from '../list-sort/contentRecommendSchema';
+import { contentRecommendColumns, contentRecommendSearchSchema } from '../list-sort/contentRecommendSchema';
+import { activityMaterialsPageConfig } from '../activity-materials/schema';
 import {
   PAGE_CONFIG_STORAGE_KEYS,
   defaultFormSchema,
@@ -105,6 +103,8 @@ const {
   visibleColumnKeys
 } = useTableConfig();
 
+const activePageKey = ref(defaultPageMeta.pageKey);
+
 const {
   conditionFieldOptions,
   failNextSave,
@@ -138,7 +138,6 @@ const publishLoading = ref(false);
 const pageCreateModalVisible = ref(false);
 const pageMetaModalMode = ref<'create' | 'edit'>('create');
 const editingPageKey = ref('');
-const activePageKey = ref(defaultPageMeta.pageKey);
 const newPageModel = reactive({
   pageName: '',
   pageKey: '',
@@ -149,10 +148,18 @@ const newPageModel = reactive({
 });
 const pageTemplateSelectOptions = pageTemplateOptions.map(item => ({ label: item.label, value: item.value }));
 
-watch(() => newPageModel.template, template => {
-  if (pageMetaModalMode.value !== 'create') return;
-  newPageModel.pageType = template === 'lang-asset-form' ? 'form' : template === 'content-recommend' ? 'table' : 'table-form';
-});
+watch(
+  () => newPageModel.template,
+  template => {
+    if (pageMetaModalMode.value !== 'create') return;
+    newPageModel.pageType =
+      template === 'lang-asset-form' || template === 'activity-materials'
+        ? 'form'
+        : template === 'content-recommend'
+          ? 'table'
+          : 'table-form';
+  }
+);
 
 function createPageConfig(partial?: Partial<PageConfig>): PageConfig {
   return {
@@ -251,6 +258,14 @@ function createLangAssetFormTemplate(partial?: Partial<PageConfig>): PageConfig 
   });
 }
 
+/** 活动素材配置表单：深拷贝共享 Schema，再叠创建弹窗中的页面元数据。 */
+function createActivityMaterialsTemplate(partial?: Partial<PageConfig>): PageConfig {
+  return {
+    ...cloneJson(activityMaterialsPageConfig),
+    ...partial
+  };
+}
+
 function normalizePageConfig(page: Partial<PageConfig>, index = 0): PageConfig {
   const fallback = createPageConfig();
   const pageKey = page.pageKey || (index === 0 ? defaultPageMeta.pageKey : `page_${index + 1}`);
@@ -262,7 +277,9 @@ function normalizePageConfig(page: Partial<PageConfig>, index = 0): PageConfig {
     pageType: page.pageType || 'table-form',
     table: cloneJson(Array.isArray(page.table) ? page.table : fallback.table),
     form: cloneJson(Array.isArray(page.form) ? page.form : fallback.form),
-    search: cloneJson(Array.isArray(page.search) ? page.search : defaultSearchSchema)
+    search: cloneJson(Array.isArray(page.search) ? page.search : defaultSearchSchema),
+    // 仅透传已声明的保存权限元数据；旧配置缺省时不补默认值，避免误判为已授权
+    ...(page.savePermission != null ? { savePermission: page.savePermission } : {})
   };
 }
 
@@ -440,6 +457,7 @@ function buildPageFromTemplate(): PageConfig {
   if (newPageModel.template === 'operations') return createOperationTemplate(meta);
   if (newPageModel.template === 'content-recommend') return createContentRecommendTemplate(meta);
   if (newPageModel.template === 'lang-asset-form') return createLangAssetFormTemplate(meta);
+  if (newPageModel.template === 'activity-materials') return createActivityMaterialsTemplate(meta);
   if (newPageModel.template === 'blank') return createBlankTemplate(meta);
 
   return createPageConfig(meta);
@@ -555,7 +573,9 @@ function validateConfiguration() {
   if (duplicateValues(pages.value.map(page => page.routeKey)).length) errors.push('权限 routeKey 存在空值或重复');
 
   pages.value.forEach(page => {
-    try { assertValidFormSchema(page.form); } catch (error) {
+    try {
+      assertValidFormSchema(page.form);
+    } catch (error) {
       errors.push(`“${page.pageName}”${error instanceof Error ? error.message : '表单配置非法'}`);
     }
     const actions = page.table.find(column => column.type === 'action')?.actions || [];

@@ -1,4 +1,4 @@
-import type { PageColumn } from '../shared';
+import type { DemoAction, PageColumn } from '../shared';
 
 export type FieldType = 'input' | 'textarea' | 'select' | 'number' | 'switch' | 'date' | 'lang-asset-group';
 
@@ -51,6 +51,8 @@ export type PageConfig = {
   table: PageColumn[];
   form: FormField[];
   search: SearchField[];
+  /** 表单保存所需按钮权限点；缺省表示配置未声明保存权限元数据，不视为已授权 */
+  savePermission?: DemoAction;
 };
 
 export type ConfigSnapshot = {

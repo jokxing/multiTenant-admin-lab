@@ -34,3 +34,8 @@ yarn.lock
 
 .VSCodeCounter
 src-tauri/target
+
+# Local Skill validation dependencies and Python caches
+.python-deps/
+__pycache__/
+*.py[cod]

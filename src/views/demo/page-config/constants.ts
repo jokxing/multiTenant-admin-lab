@@ -38,6 +38,7 @@ export const pageTemplateOptions = [
   { label: '运营配置模板', value: 'operations' },
   { label: '内容推荐列表', value: 'content-recommend' },
   { label: '多语言素材组表单', value: 'lang-asset-form' },
+  { label: '活动素材配置表单', value: 'activity-materials' },
   { label: '空白配置页', value: 'blank' }
 ] as const;
 

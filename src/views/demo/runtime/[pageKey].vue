@@ -2,14 +2,7 @@
 import { computed, h, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { NButton, NInput, NInputNumber, NSelect, NTag } from 'naive-ui';
-import {
-  activeRole,
-  canUse,
-  hasSortableColumn,
-  reviewRows,
-  type PageColumn,
-  type TableAction
-} from '../shared';
+import { activeRole, canUse, hasSortableColumn, reviewRows, type PageColumn, type TableAction } from '../shared';
 import SortableColumnCell from '../list-sort/SortableColumnCell.vue';
 import { contentRecommendRows } from '../list-sort/contentRecommendStore';
 import { useListSortActions } from '../list-sort/useListSortActions';
@@ -88,6 +81,23 @@ const formSubmitting = ref(false);
 const formSaveError = ref('');
 const formFailNext = ref(getLangAssetFailNext());
 
+/**
+ * 表单保存权限：按 routeKey + savePermission + canUse 响应式判断，不写死角色名。
+ * - 声明了 savePermission：必须 canUse 通过才可保存
+ * - activity-materials 未声明：不得默认放行
+ * - 其他旧表单未声明：保持原先可保存行为
+ */
+const canSaveForm = computed(() => {
+  const page = pageConfig.value;
+  if (!page || page.pageType !== 'form') return false;
+
+  if (page.savePermission) return canUse(page.routeKey, page.savePermission);
+  if (page.pageKey === 'activity-materials') return false;
+  return true;
+});
+
+const formFieldsReadonly = computed(() => formSubmitting.value || !canSaveForm.value);
+
 function createFormFieldValue(field: FormField) {
   if (field.type === 'switch') return false;
   if (field.type === 'lang-asset-group') return createEmptyLangAssetGroup();
@@ -96,15 +106,17 @@ function createFormFieldValue(field: FormField) {
 
 function syncRuntimeFormModel() {
   Object.keys(formModel).forEach(key => {
-    if (!formSchema.value.some(field => field.field === key)) delete formModel[key];
+    if (!formSchema.value.some(field => field.field === key)) Reflect.deleteProperty(formModel, key);
   });
   formSchema.value.forEach(field => {
     if (!(field.field in formModel)) formModel[field.field] = createFormFieldValue(field);
   });
   const drafts = loadLangAssetForm(pageKey.value);
-  formSchema.value.filter(field => field.type === 'lang-asset-group').forEach(field => {
-    formModel[field.field] = drafts[field.field] || createEmptyLangAssetGroup();
-  });
+  formSchema.value
+    .filter(field => field.type === 'lang-asset-group')
+    .forEach(field => {
+      formModel[field.field] = drafts[field.field] || createEmptyLangAssetGroup();
+    });
   formErrors.value = {};
   formSaveError.value = '';
   formFailNext.value = getLangAssetFailNext();
@@ -128,11 +140,19 @@ function langFieldErrors(field: FormField) {
 }
 
 function setFormFailNext(enabled: boolean) {
+  if (!canSaveForm.value) {
+    window.$message?.warning('当前角色无保存权限，无法修改该开关');
+    return;
+  }
   formFailNext.value = enabled;
   setLangAssetFailNext(enabled);
 }
 
 async function submitRuntimeForm() {
+  if (!canSaveForm.value) {
+    window.$message?.warning('当前角色无保存权限');
+    return;
+  }
   if (formSubmitting.value) {
     window.$message?.warning('表单提交中，请勿重复操作');
     return;
@@ -142,8 +162,14 @@ async function submitRuntimeForm() {
   formSchema.value.forEach(field => {
     const value = formModel[field.field];
     if (field.type === 'lang-asset-group') {
-      const groupErrors = validateLangAssetGroup(value as LangAssetGroupValue, field.primaryLang || 'zh-CN', field.languages);
-      Object.entries(groupErrors).forEach(([key, message]) => { errors[`${field.field}.${key}`] = message; });
+      const groupErrors = validateLangAssetGroup(
+        value as LangAssetGroupValue,
+        field.primaryLang || 'zh-CN',
+        field.languages
+      );
+      Object.entries(groupErrors).forEach(([key, message]) => {
+        errors[`${field.field}.${key}`] = message;
+      });
       return;
     }
     if (field.required && (value === '' || value == null)) {
@@ -155,8 +181,11 @@ async function submitRuntimeForm() {
     }
     if (field.pattern) {
       try {
-        if (value && !new RegExp(field.pattern).test(String(value))) errors[field.field] = field.message || `${field.label}格式不正确`;
-      } catch { errors[field.field] = `${field.label}的正则表达式非法，请修正配置`; }
+        if (value && !new RegExp(field.pattern).test(String(value)))
+          errors[field.field] = field.message || `${field.label}格式不正确`;
+      } catch {
+        errors[field.field] = `${field.label}的正则表达式非法，请修正配置`;
+      }
     }
   });
   formErrors.value = errors;
@@ -175,9 +204,14 @@ async function submitRuntimeForm() {
   formSubmitting.value = true;
   const scope = pageKey.value;
   try {
-    const result = await saveLangAssetForm(scope, Object.fromEntries(
-      formSchema.value.filter(field => field.type === 'lang-asset-group').map(field => [field.field, formModel[field.field]])
-    ));
+    const result = await saveLangAssetForm(
+      scope,
+      Object.fromEntries(
+        formSchema.value
+          .filter(field => field.type === 'lang-asset-group')
+          .map(field => [field.field, formModel[field.field]])
+      )
+    );
     if (scope !== pageKey.value) return;
     formFailNext.value = getLangAssetFailNext();
     if (!result.ok) {
@@ -214,9 +248,7 @@ function isEmptyValue(value: any) {
   return value === '' || value == null;
 }
 
-const hasActiveFilters = computed(() =>
-  searchSchema.value.some(field => !isEmptyValue(searchModel[field.key]))
-);
+const hasActiveFilters = computed(() => searchSchema.value.some(field => !isEmptyValue(searchModel[field.key])));
 
 const {
   submitting: sortSubmitting,
@@ -290,7 +322,7 @@ function executeAction(action: TableAction, row: Record<string, any>) {
     return;
   }
 
-  Object.keys(actionModel).forEach(key => delete actionModel[key]);
+  Object.keys(actionModel).forEach(key => Reflect.deleteProperty(actionModel, key));
   action.formSchema?.forEach(field => {
     actionModel[field.field] = row[field.field] ?? null;
   });
@@ -429,9 +461,7 @@ function submitActionForm() {
           </NSpace>
         </div>
         <NAlert type="success" :bordered="false" class="runtime-summary">
-          <template v-if="isFormPage">
-            表单字段 {{ pageConfig.form.length }} 个，pageType: form。
-          </template>
+          <template v-if="isFormPage">表单字段 {{ pageConfig.form.length }} 个，pageType: form。</template>
           <template v-else>
             Schema 列 {{ pageConfig.table.length }} 个，搜索项 {{ pageConfig.search.length }} 个，操作按钮
             {{ authorizedActionCount }}/{{ configuredActionCount }} 个可见。
@@ -445,7 +475,8 @@ function submitActionForm() {
             <NText depth="3">本地 Mock 保存 · 切换语言保留输入 · 非法配置在配置器拒绝应用</NText>
             <NSpace align="center">
               <NText>下次保存失败</NText>
-              <NSwitch :value="formFailNext" @update:value="setFormFailNext" />
+              <NSwitch :value="formFailNext" :disabled="!canSaveForm" @update:value="setFormFailNext" />
+              <NTag v-if="!canSaveForm" type="warning" :bordered="false">只读</NTag>
               <NTag v-if="formSubmitting" type="warning" :bordered="false">提交中</NTag>
             </NSpace>
           </NSpace>
@@ -467,7 +498,7 @@ function submitActionForm() {
                 :primary-lang="field.primaryLang || 'zh-CN'"
                 :languages="field.languages || ['zh-CN', 'zh-TW', 'en']"
                 :errors="langFieldErrors(field)"
-                :disabled="formSubmitting"
+                :disabled="formFieldsReadonly"
                 @update:model-value="value => (formModel[field.field] = value)"
               />
               <NInput
@@ -475,29 +506,39 @@ function submitActionForm() {
                 v-model:value="formModel[field.field]"
                 :type="field.type === 'textarea' ? 'textarea' : 'text'"
                 :placeholder="field.placeholder"
+                :disabled="formFieldsReadonly"
               />
               <NSelect
                 v-else-if="field.type === 'select'"
                 v-model:value="formModel[field.field]"
                 :options="field.options || []"
+                :disabled="formFieldsReadonly"
               />
               <NInputNumber
                 v-else-if="field.type === 'number'"
                 v-model:value="formModel[field.field]"
                 :min="field.min"
                 :max="field.max"
+                :disabled="formFieldsReadonly"
                 class="w-full"
               />
-              <NSwitch v-else-if="field.type === 'switch'" v-model:value="formModel[field.field]" />
+              <NSwitch
+                v-else-if="field.type === 'switch'"
+                v-model:value="formModel[field.field]"
+                :disabled="formFieldsReadonly"
+              />
               <NDatePicker
                 v-else-if="field.type === 'date'"
                 v-model:formatted-value="formModel[field.field]"
                 type="date"
                 value-format="yyyy-MM-dd"
+                :disabled="formFieldsReadonly"
                 class="w-full"
               />
             </NFormItem>
-            <NButton type="primary" :loading="formSubmitting" @click="submitRuntimeForm">保存素材组</NButton>
+            <NButton v-if="canSaveForm" type="primary" :loading="formSubmitting" @click="submitRuntimeForm">
+              保存素材组
+            </NButton>
           </NForm>
         </NCard>
       </template>

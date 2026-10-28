@@ -18,6 +18,8 @@ const router = useRouter();
 
 const checkedKeys = ref<string[]>([]);
 const publishedKeys = ref<string[]>([]);
+/** 加载角色时的完整权限基线（含权限树未展示的按钮），用于草稿合并与撤销。 */
+const publishedRecords = ref<RouteKeyRecord[]>([]);
 const auditLogs = ref<Array<{ time: string; role: string; summary: string }>>([]);
 const configuredPages = ref<PageConfig[]>(loadConfiguredPages());
 
@@ -61,28 +63,49 @@ function refreshConfiguredPages() {
   window.$message?.success('已刷新页面配置');
 }
 
-const schemaActionNodes = computed(() => {
-  const actions = configuredPages.value.flatMap(
-    page => page.table.find(column => column.type === 'action')?.actions || []
-  );
+/** 从已发布 PageConfig 发现权限点：表格操作 + 可选 savePermission；同一权限键去重。 */
+function collectPagePermissionChildren(page: PageConfig) {
+  const actions = page.table.find(column => column.type === 'action')?.actions || [];
   const seen = new Set<string>();
-  return actions
-    .filter(action => action.permission && !seen.has(action.permission) && seen.add(action.permission))
-    .map(action => ({ label: action.label, key: action.permission as string }));
+  const children: Array<{ label: string; key: string }> = [];
+
+  actions.forEach(action => {
+    if (!action.permission || seen.has(action.permission)) return;
+    seen.add(action.permission);
+    children.push({ label: action.label, key: `${page.routeKey}:${action.permission}` });
+  });
+
+  // 仅当页面显式声明 savePermission 时增加「保存」节点；与表格操作同键则跳过
+  if (page.savePermission && !seen.has(page.savePermission)) {
+    seen.add(page.savePermission);
+    children.push({ label: '保存', key: `${page.routeKey}:${page.savePermission}` });
+  }
+
+  return children;
+}
+
+const schemaActionNodes = computed(() => {
+  const seen = new Set<string>();
+  const nodes: Array<{ label: string; key: string }> = [];
+
+  configuredPages.value.forEach(page => {
+    collectPagePermissionChildren(page).forEach(child => {
+      const permission = child.key.split(':')[1];
+      if (!permission || seen.has(permission)) return;
+      seen.add(permission);
+      nodes.push({ label: child.label, key: permission });
+    });
+  });
+
+  return nodes;
 });
 
 const configuredPageNodes = computed(() =>
-  configuredPages.value.map(page => {
-    const actions = page.table.find(column => column.type === 'action')?.actions || [];
-    const seen = new Set<string>();
-    return {
-      label: page.pageName,
-      key: page.routeKey,
-      children: actions
-        .filter(action => action.permission && !seen.has(action.permission) && seen.add(action.permission))
-        .map(action => ({ label: action.label, key: `${page.routeKey}:${action.permission}` }))
-    };
-  })
+  configuredPages.value.map(page => ({
+    label: page.pageName,
+    key: page.routeKey,
+    children: collectPagePermissionChildren(page)
+  }))
 );
 
 const permissionTree = computed(() => [
@@ -129,46 +152,112 @@ const permissionTree = computed(() => [
     ]
   }
 ]);
+
+/** 权限树中实际可勾选的键；树外既有权限不进勾选态，合并草稿时原样保留。 */
+const visiblePermissionKeys = computed(() => {
+  const keys = new Set<string>();
+  permissionTree.value.forEach(route => {
+    keys.add(route.key);
+    (route.children || []).forEach(child => keys.add(child.key));
+  });
+  return keys;
+});
+
 const roleOptions = Object.entries(roleProfiles).map(([value, profile]) => ({ label: profile.label, value }));
 
 function recordsToKeys(records: RouteKeyRecord[]) {
   return records.flatMap(route => [route.key, ...route.buttons.map(button => `${route.key}:${button}`)]);
 }
 
-function keysToRecords(keys: string[]): RouteKeyRecord[] {
-  const keySet = new Set(keys);
-  return permissionTree.value
-    .filter(route => keySet.has(route.key) || (route.children || []).some(child => keySet.has(child.key)))
-    .map(route => ({
-      key: route.key,
-      title: route.label,
-      buttons: (route.children || [])
-        .filter(child => keySet.has(child.key))
-        .map(child => child.key.split(':')[1] as DemoAction)
-    }));
+function syncCheckedKeysFromPublished() {
+  const visible = visiblePermissionKeys.value;
+  checkedKeys.value = publishedKeys.value.filter(key => visible.has(key));
+}
+
+/**
+ * 按「可见权限以勾选为准、树外权限保留」合并草稿。
+ * - 父节点勾选不授予子按钮（依赖 cascade=false）
+ * - 可见子节点取消勾选 → 从草稿移除对应按钮
+ * - 树未展示的既有按钮（如 approve、export）保留，不被无条件覆盖
+ */
+function buildDraftRouteKeys(checked: string[], baseline: RouteKeyRecord[]): RouteKeyRecord[] {
+  const checkedSet = new Set(checked);
+  const treeByRoute = new Map(permissionTree.value.map(route => [route.key, route]));
+  const result: RouteKeyRecord[] = [];
+  const handled = new Set<string>();
+
+  baseline.forEach(record => {
+    const treeNode = treeByRoute.get(record.key);
+    if (!treeNode) {
+      result.push({ key: record.key, title: record.title, buttons: [...record.buttons] });
+      handled.add(record.key);
+      return;
+    }
+
+    const visibleButtons = new Set((treeNode.children || []).map(child => child.key.split(':')[1]));
+    const preservedButtons = record.buttons.filter(button => !visibleButtons.has(button));
+    const checkedVisibleButtons = (treeNode.children || [])
+      .filter(child => checkedSet.has(child.key))
+      .map(child => child.key.split(':')[1] as DemoAction);
+    const buttons = [...new Set([...preservedButtons, ...checkedVisibleButtons])];
+    const keepRoute = checkedSet.has(record.key) || buttons.length > 0;
+
+    if (keepRoute) {
+      result.push({ key: record.key, title: treeNode.label || record.title, buttons });
+    }
+    handled.add(record.key);
+  });
+
+  permissionTree.value.forEach(treeNode => {
+    if (handled.has(treeNode.key)) return;
+    const checkedVisibleButtons = (treeNode.children || [])
+      .filter(child => checkedSet.has(child.key))
+      .map(child => child.key.split(':')[1] as DemoAction);
+    if (!checkedSet.has(treeNode.key) && checkedVisibleButtons.length === 0) return;
+    result.push({
+      key: treeNode.key,
+      title: treeNode.label,
+      buttons: checkedVisibleButtons
+    });
+  });
+
+  return result;
 }
 
 function loadRole(role: DemoRole) {
-  const keys = recordsToKeys(roleProfiles[role].routeKeys);
-  checkedKeys.value = [...keys];
-  publishedKeys.value = [...keys];
+  const records = cloneJson(roleProfiles[role].routeKeys);
+  publishedRecords.value = records;
+  publishedKeys.value = recordsToKeys(records);
+  syncCheckedKeysFromPublished();
 }
 
 watch(activeRole, role => loadRole(role), { immediate: true });
 
-const draftRouteKeys = computed(() => keysToRecords(checkedKeys.value));
+watch(visiblePermissionKeys, () => {
+  // 刷新页面配置后，仅同步可见勾选，不改动已发布基线中的隐藏权限
+  syncCheckedKeysFromPublished();
+});
+
+const draftRouteKeys = computed(() => buildDraftRouteKeys(checkedKeys.value, publishedRecords.value));
 const effectiveDraftKeys = computed(() => recordsToKeys(draftRouteKeys.value));
 const addedKeys = computed(() => effectiveDraftKeys.value.filter(key => !publishedKeys.value.includes(key)));
 const removedKeys = computed(() => publishedKeys.value.filter(key => !effectiveDraftKeys.value.includes(key)));
 const hasChanges = computed(() => addedKeys.value.length > 0 || removedKeys.value.length > 0);
 
+function resetCheckedKeys() {
+  syncCheckedKeysFromPublished();
+}
+
 function savePermission() {
-  roleProfiles[activeRole.value].routeKeys = draftRouteKeys.value.map(route => ({
+  const nextRecords = draftRouteKeys.value.map(route => ({
     ...route,
     buttons: [...route.buttons]
   }));
+  roleProfiles[activeRole.value].routeKeys = nextRecords;
   const summary = `新增 ${addedKeys.value.length} 项，移除 ${removedKeys.value.length} 项`;
-  publishedKeys.value = [...effectiveDraftKeys.value];
+  publishedRecords.value = cloneJson(nextRecords);
+  publishedKeys.value = recordsToKeys(nextRecords);
+  syncCheckedKeysFromPublished();
   auditLogs.value.unshift({
     time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
     role: currentProfile.value.label,
@@ -204,14 +293,14 @@ function savePermission() {
         <NTree
           v-model:checked-keys="checkedKeys"
           block-line
-          cascade
+          :cascade="false"
           checkable
           :data="permissionTree"
           key-field="key"
           label-field="label"
         />
         <div class="actions">
-          <NButton :disabled="!hasChanges" @click="checkedKeys = [...publishedKeys]">撤销变更</NButton>
+          <NButton :disabled="!hasChanges" @click="resetCheckedKeys">撤销变更</NButton>
           <NButton type="primary" :disabled="!hasChanges" @click="savePermission">发布权限策略</NButton>
         </div>
       </NCard>
