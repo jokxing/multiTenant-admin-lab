@@ -312,6 +312,10 @@ function normalizeSnapshot(value: ConfigSnapshot | LegacyConfigSnapshot | null):
 
 const storedPublished = loadStoredValue<ConfigSnapshot | LegacyConfigSnapshot>(PAGE_CONFIG_STORAGE_KEYS.published);
 const initialSnapshot = normalizeSnapshot(storedPublished);
+initialSnapshot.activePageKey =
+  initialSnapshot.pages.find(page => page.pageKey === defaultPageMeta.pageKey)?.pageKey ||
+  initialSnapshot.pages.find(page => page.pageKey === initialSnapshot.activePageKey)?.pageKey ||
+  initialSnapshot.pages[0].pageKey;
 const pages = ref<PageConfig[]>(cloneJson(initialSnapshot.pages));
 activePageKey.value = initialSnapshot.activePageKey;
 
